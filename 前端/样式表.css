@@ -1,0 +1,1519 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — Luxury Terminal / Neo-Noir Hacker
+   A premium dark interface with electric blue accents
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Google Fonts 通过 JS 注入，此处声明回退 ──────────────────── */
+
+/* ─── CSS 变量 ─────────────────────────────────────────────── */
+:root {
+    --nca-bg-primary: #0a0a0f;
+    --nca-bg-secondary: #12121a;
+    --nca-bg-tertiary: #1a1a25;
+    --nca-bg-code: #080810;
+    --nca-accent: #00d4ff;
+    --nca-accent-dim: rgba(0, 212, 255, 0.12);
+    --nca-accent-glow: rgba(0, 212, 255, 0.3);
+    --nca-purple: #8b5cf6;
+    --nca-purple-dim: rgba(139, 92, 246, 0.12);
+    --nca-purple-glow: rgba(139, 92, 246, 0.3);
+    --nca-green: #10b981;
+    --nca-green-dim: rgba(16, 185, 129, 0.12);
+    --nca-warning: #f59e0b;
+    --nca-error: #ef4444;
+    --nca-error-dim: rgba(239, 68, 68, 0.12);
+    --nca-fg: #e4e4e7;
+    --nca-fg-dim: #71717a;
+    --nca-fg-muted: #52525b;
+    --nca-border: rgba(255, 255, 255, 0.06);
+    --nca-border-hover: rgba(255, 255, 255, 0.12);
+    --nca-glass: rgba(18, 18, 26, 0.85);
+    --nca-radius: 8px;
+    --nca-radius-sm: 5px;
+    --nca-radius-lg: 12px;
+    --nca-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --nca-font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --nca-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    --nca-transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    --nca-transition-slow: 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ─── 动画关键帧 ──────────────────────────────────────────── */
+@keyframes nca-glow-pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+@keyframes nca-slide-up-fade {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes nca-slide-in-right {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes nca-scale-in {
+    from { transform: scale(0.92); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes nca-loading-pulse {
+    0%, 100% { opacity: 0.2; box-shadow: 0 0 2px var(--nca-accent); }
+    50% { opacity: 1; box-shadow: 0 0 8px var(--nca-accent), 0 0 16px var(--nca-accent-dim); }
+}
+
+@keyframes nca-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes nca-grid-drift {
+    0% { background-position: 0 0; }
+    100% { background-position: 40px 40px; }
+}
+
+@keyframes nca-border-glow {
+    0%, 100% { border-color: rgba(0, 212, 255, 0.2); }
+    50% { border-color: rgba(0, 212, 255, 0.5); }
+}
+
+@keyframes nca-toast-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.95); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+@keyframes nca-toast-out {
+    from { opacity: 1; }
+    to { opacity: 0; pointer-events: none; }
+}
+
+/* ─── 容器布局 ─────────────────────────────────────────────── */
+.nca-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    min-height: 100%;
+    width: 100%;
+    color: var(--nca-fg);
+    font-family: var(--nca-font-body);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    background: var(--nca-bg-primary);
+    position: relative;
+}
+
+/* ─── 主内容区 ─────────────────────────────────────────────── */
+.nca-main-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ─── 顶部品牌栏 ──────────────────────────────────────────── */
+.nca-header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    height: 52px;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--nca-border);
+    gap: 8px;
+    flex-shrink: 0;
+    background: var(--nca-bg-secondary);
+    overflow: hidden;
+}
+
+/* 网格线纹理背景 */
+.nca-header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+    animation: nca-grid-drift 20s linear infinite;
+    pointer-events: none;
+}
+
+/* 底部发光线 */
+.nca-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--nca-accent-dim), var(--nca-accent), var(--nca-accent-dim), transparent);
+    opacity: 0.6;
+}
+
+.nca-header-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+    cursor: pointer;
+    transition: opacity var(--nca-transition-fast);
+}
+
+.nca-header-brand:hover {
+    opacity: 0.8;
+}
+
+.nca-header-brand:hover .nca-brand-text {
+    color: var(--nca-accent);
+}
+
+.nca-logo {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.nca-logo svg {
+    width: 18px;
+    height: 18px;
+    filter: drop-shadow(0 0 4px var(--nca-accent-glow));
+}
+
+.nca-logo svg path {
+    stroke: var(--nca-accent);
+    stroke-width: 1.5;
+    fill: none;
+    animation: nca-glow-pulse 3s ease-in-out infinite;
+}
+
+.nca-brand-text {
+    font-family: var(--nca-font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: var(--nca-fg);
+    white-space: nowrap;
+    text-transform: uppercase;
+}
+
+.nca-header-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+
+/* ─── 图标按钮 ─────────────────────────────────────────────── */
+.nca-icon-btn {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--nca-fg-dim);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    font-size: 14px;
+    transition: all var(--nca-transition-fast);
+    position: relative;
+}
+
+.nca-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--nca-border-hover);
+    color: var(--nca-fg);
+}
+
+.nca-icon-btn:active {
+    transform: scale(0.9);
+}
+
+.nca-icon-btn.settings-btn:hover {
+    animation: nca-spin 0.8s ease;
+}
+
+.nca-icon-btn.new-session-btn:hover {
+    color: var(--nca-accent);
+    box-shadow: 0 0 12px var(--nca-accent-dim);
+    animation: nca-glow-pulse 1.5s ease-in-out infinite;
+}
+
+/* ─── 会话列表区域 ─────────────────────────────────────────── */
+.nca-sessions {
+    border-bottom: 1px solid var(--nca-border);
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: max-height var(--nca-transition-slow);
+}
+
+.nca-sessions-toggle {
+    display: flex;
+    align-items: center;
+    padding: 9px 14px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+    user-select: none;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    width: 100%;
+    font-family: var(--nca-font-mono);
+    transition: color var(--nca-transition-fast);
+}
+
+.nca-sessions-toggle:hover {
+    color: var(--nca-fg);
+}
+
+.nca-sessions-toggle .arrow {
+    font-size: 9px;
+    transition: transform var(--nca-transition-normal);
+    color: var(--nca-accent);
+}
+
+.nca-sessions.collapsed .nca-sessions-toggle .arrow {
+    transform: rotate(-90deg);
+}
+
+.nca-sessions-toggle .session-count {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--nca-fg-muted);
+    font-weight: 400;
+}
+
+.nca-session-list {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 0 10px 8px;
+}
+
+.nca-session-list::-webkit-scrollbar { width: 3px; }
+.nca-session-list::-webkit-scrollbar-track { background: transparent; }
+.nca-session-list::-webkit-scrollbar-thumb { background: var(--nca-border-hover); border-radius: 2px; }
+
+.nca-session-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    gap: 10px;
+    transition: all var(--nca-transition-fast);
+    margin-bottom: 2px;
+    border-left: 2px solid transparent;
+    position: relative;
+}
+
+.nca-session-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+    border-left-color: rgba(255, 255, 255, 0.1);
+}
+
+.nca-session-item.active {
+    background: var(--nca-accent-dim);
+    border-left-color: var(--nca-accent);
+    box-shadow: -2px 0 8px var(--nca-accent-dim);
+}
+
+.nca-session-item .session-title {
+    flex: 1;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--nca-fg);
+}
+
+.nca-session-item .session-time {
+    font-size: 10px;
+    color: var(--nca-fg-muted);
+    font-family: var(--nca-font-mono);
+    flex-shrink: 0;
+}
+
+.nca-session-item .session-delete {
+    opacity: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    background: transparent;
+    border: none;
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    font-size: 11px;
+    transition: all var(--nca-transition-fast);
+    flex-shrink: 0;
+}
+
+.nca-session-item:hover .session-delete { opacity: 1; }
+.nca-session-item .session-delete:hover {
+    background: var(--nca-error-dim);
+    color: var(--nca-error);
+}
+
+.nca-new-session-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 10px;
+    margin: 4px 8px 8px;
+    border-radius: var(--nca-radius-sm);
+    border: 1px dashed rgba(16, 185, 129, 0.3);
+    background: transparent;
+    color: var(--nca-green);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    width: calc(100% - 16px);
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.5px;
+}
+
+.nca-new-session-btn:hover {
+    border-color: var(--nca-green);
+    background: var(--nca-green-dim);
+    box-shadow: 0 0 12px var(--nca-green-dim);
+}
+
+/* ─── 消息区域 ─────────────────────────────────────────────── */
+.nca-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 14px;
+    scroll-behavior: smooth;
+}
+
+.nca-messages::-webkit-scrollbar { width: 4px; }
+.nca-messages::-webkit-scrollbar-track { background: transparent; }
+.nca-messages::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 2px; }
+.nca-messages::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* ─── 欢迎空状态 ──────────────────────────────────────────── */
+.nca-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    padding: 24px;
+    gap: 14px;
+}
+
+.nca-welcome-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--nca-accent-dim);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: var(--nca-radius-lg);
+    font-size: 22px;
+    box-shadow: 0 0 20px var(--nca-accent-dim);
+}
+
+.nca-welcome h3 {
+    margin: 0;
+    font-family: var(--nca-font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--nca-fg);
+    letter-spacing: 1px;
+}
+
+.nca-welcome p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    max-width: 260px;
+    line-height: 1.7;
+}
+
+.nca-quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    width: 100%;
+    max-width: 250px;
+}
+
+.nca-quick-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--nca-radius);
+    border: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    color: var(--nca-fg);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all var(--nca-transition-fast);
+    text-align: left;
+    backdrop-filter: blur(4px);
+}
+
+.nca-quick-action:hover {
+    border-color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 16px var(--nca-accent-dim);
+    transform: translateX(2px);
+}
+
+.nca-quick-action .qa-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* ─── 消息气泡 ─────────────────────────────────────────────── */
+.nca-msg {
+    margin-bottom: 16px;
+    animation: nca-slide-up-fade var(--nca-transition-slow) ease;
+}
+
+.nca-msg-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-msg-header .msg-role {
+    color: var(--nca-fg-dim);
+}
+
+.nca-msg-header .msg-time {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--nca-fg-muted);
+    font-weight: 400;
+}
+
+.nca-msg.user .msg-role { color: var(--nca-green); }
+.nca-msg.assistant .msg-role { color: var(--nca-purple); }
+.nca-msg.system .msg-role { color: var(--nca-fg-muted); }
+
+.nca-msg-body {
+    padding: 12px 14px;
+    border-radius: var(--nca-radius);
+    font-size: 13px;
+    line-height: 1.7;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    position: relative;
+}
+
+/* 用户消息 - 右侧深灰 */
+.nca-msg.user .nca-msg-body {
+    background: var(--nca-bg-tertiary);
+    border: 1px solid var(--nca-border);
+    margin-left: 20px;
+}
+
+/* AI 消息 - 左侧紫色渐变边条 */
+.nca-msg.assistant .nca-msg-body {
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-left: 2px solid;
+    border-image: linear-gradient(180deg, var(--nca-purple), var(--nca-accent)) 1;
+    margin-right: 10px;
+}
+
+/* 系统消息 */
+.nca-msg.system .nca-msg-body {
+    background: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+    color: var(--nca-fg-dim);
+    text-align: center;
+    font-size: 12px;
+}
+
+/* ─── Markdown 渲染 ────────────────────────────────────────── */
+.nca-msg-body p { margin: 0 0 8px; }
+.nca-msg-body p:last-child { margin-bottom: 0; }
+
+.nca-msg-body code {
+    background: var(--nca-bg-code);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: var(--nca-font-mono);
+    font-size: 11.5px;
+    color: var(--nca-accent);
+    border: 1px solid var(--nca-border);
+}
+
+.nca-msg-body pre {
+    position: relative;
+    margin: 10px 0;
+    border-radius: var(--nca-radius);
+    overflow: hidden;
+}
+
+.nca-msg-body pre code {
+    display: block;
+    padding: 14px 16px;
+    padding-top: 32px;
+    background: var(--nca-bg-code);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    color: var(--nca-fg);
+}
+
+.nca-code-lang {
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: 4px 10px;
+    font-size: 9px;
+    font-family: var(--nca-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--nca-fg-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--nca-border);
+    border-right: 1px solid var(--nca-border);
+    border-radius: 0 0 var(--nca-radius-sm) 0;
+}
+
+.nca-code-copy {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    padding: 3px 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-radius: 4px;
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    font-size: 10px;
+    font-family: var(--nca-font-mono);
+    opacity: 0;
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-msg-body pre:hover .nca-code-copy { opacity: 1; }
+.nca-code-copy:hover {
+    background: var(--nca-accent);
+    color: #000;
+    border-color: var(--nca-accent);
+}
+
+.nca-code-copy.copied {
+    background: var(--nca-green);
+    color: #000;
+    border-color: var(--nca-green);
+    opacity: 1;
+}
+
+/* ─── 加载动画（脉冲光点）──────────────────────────────────── */
+.nca-loading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 16px;
+}
+
+.nca-loading-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--nca-accent);
+    animation: nca-loading-pulse 1.4s infinite ease-in-out;
+}
+
+.nca-loading-dot:nth-child(1) { animation-delay: 0s; }
+.nca-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+.nca-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ─── 底部输入区域 ─────────────────────────────────────────── */
+
+/* --- Model Switcher --- */
+.nca-model-switcher {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+}
+
+.nca-switch-group {
+    display: flex;
+    gap: 2px;
+    background: var(--nca-bg-primary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    padding: 2px;
+}
+
+.nca-switch-btn {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.3px;
+}
+
+.nca-switch-btn:hover:not(.active) {
+    color: var(--nca-fg);
+}
+
+.nca-switch-btn.active {
+    background: rgba(0, 212, 255, 0.1);
+    color: var(--nca-accent);
+    font-weight: 600;
+    box-shadow: 0 0 6px var(--nca-accent-dim);
+}
+
+.nca-model-select {
+    flex: 1;
+    padding: 4px 8px;
+    background: var(--nca-bg-primary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    outline: none;
+    cursor: pointer;
+    transition: border-color var(--nca-transition-fast);
+    min-width: 0;
+}
+
+.nca-model-select:focus {
+    border-color: rgba(0, 212, 255, 0.4);
+}
+
+.nca-model-select option {
+    background: var(--nca-bg-secondary);
+    color: var(--nca-fg);
+}
+
+.nca-api-info {
+    flex: 1;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 4px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--nca-radius-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-api-info:hover {
+    color: var(--nca-accent);
+    border-color: var(--nca-border);
+    background: var(--nca-accent-dim);
+}
+
+.nca-input-area {
+    padding: 10px 14px;
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ─── 文件附件预览区 ───────────────────────────────── */
+.nca-attachments-preview {
+    display: flex;
+    gap: 8px;
+    padding: 8px 4px;
+    margin-bottom: 8px;
+    overflow-x: auto;
+    background: rgba(10, 10, 15, 0.5);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    backdrop-filter: blur(4px);
+}
+
+.nca-attachments-preview::-webkit-scrollbar { height: 3px; }
+.nca-attachments-preview::-webkit-scrollbar-track { background: transparent; }
+.nca-attachments-preview::-webkit-scrollbar-thumb { background: var(--nca-border-hover); border-radius: 2px; }
+
+.nca-attach-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 68px;
+    min-width: 68px;
+    padding: 8px 4px 6px;
+    background: var(--nca-bg-tertiary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-attach-card:hover {
+    border-color: var(--nca-border-hover);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.nca-attach-thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    border: 1px solid var(--nca-border);
+}
+
+.nca-attach-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    background: var(--nca-accent-dim);
+    border: 1px solid rgba(0, 212, 255, 0.15);
+    font-size: 9px;
+    font-family: var(--nca-font-mono);
+    font-weight: 700;
+    color: var(--nca-accent);
+    letter-spacing: 0.3px;
+}
+
+.nca-attach-name {
+    font-size: 9px;
+    color: var(--nca-fg-dim);
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-attach-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.6);
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--nca-transition-fast);
+    line-height: 1;
+}
+
+.nca-attach-card:hover .nca-attach-remove {
+    opacity: 1;
+}
+
+.nca-attach-remove:hover {
+    background: var(--nca-error);
+    color: #fff;
+}
+
+/* ─── 添加文件按钮 ─────────────────────────────────── */
+.nca-attach-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--nca-border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--nca-fg-dim);
+    font-size: 16px;
+    font-weight: 300;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all var(--nca-transition-fast);
+    backdrop-filter: blur(4px);
+}
+
+.nca-attach-btn:hover {
+    border-color: var(--nca-accent);
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 12px var(--nca-accent-dim);
+}
+
+.nca-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    padding: 8px 10px 8px 14px;
+    background: var(--nca-bg-primary);
+    transition: all var(--nca-transition-normal);
+}
+
+.nca-input-wrapper:focus-within {
+    border-color: rgba(0, 212, 255, 0.4);
+    box-shadow: 0 0 0 3px var(--nca-accent-dim), 0 0 20px var(--nca-accent-dim);
+}
+
+.nca-input-wrapper textarea {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--nca-fg);
+    font-size: 13px;
+    font-family: var(--nca-font-body);
+    line-height: 1.5;
+    resize: none;
+    outline: none;
+    min-height: 20px;
+    max-height: 100px;
+    padding: 2px 0;
+}
+
+.nca-input-wrapper textarea::placeholder {
+    color: var(--nca-fg-muted);
+    font-style: italic;
+}
+
+.nca-send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--nca-border);
+    background: transparent;
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    transition: all var(--nca-transition-fast);
+    flex-shrink: 0;
+}
+
+.nca-send-btn.active {
+    background: var(--nca-accent);
+    border-color: var(--nca-accent);
+    color: #000;
+    box-shadow: 0 0 12px var(--nca-accent-dim);
+}
+
+.nca-send-btn.active:hover {
+    box-shadow: 0 0 20px var(--nca-accent-glow);
+    transform: scale(1.08);
+}
+
+.nca-send-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ─── 状态栏 ──────────────────────────────────────────────── */
+.nca-status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px;
+    height: 28px;
+    box-sizing: border-box;
+    font-size: 10px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-muted);
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-primary);
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
+}
+
+.nca-status-bar .status-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.nca-status-bar .status-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--nca-green);
+    box-shadow: 0 0 4px var(--nca-green);
+}
+
+.nca-status-bar .status-dot.busy {
+    background: var(--nca-warning);
+    box-shadow: 0 0 4px var(--nca-warning);
+    animation: nca-glow-pulse 1.2s infinite;
+}
+
+.nca-status-bar .status-dot.error {
+    background: var(--nca-error);
+    box-shadow: 0 0 4px var(--nca-error);
+}
+
+.nca-status-bar .status-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.nca-status-bar .status-separator {
+    color: var(--nca-fg-muted);
+    opacity: 0.5;
+}
+
+/* ─── 设置面板（右侧滑入）───────────────────────────────────── */
+.nca-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: stretch;
+    justify-content: flex-end;
+    z-index: 1000;
+    animation: nca-fade-overlay 0.2s ease;
+}
+
+@keyframes nca-fade-overlay {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.nca-overlay.center-modal {
+    align-items: center;
+    justify-content: center;
+}
+
+/* 右侧滑入面板 */
+.nca-panel {
+    width: 100%;
+    max-width: 340px;
+    height: 100%;
+    background: var(--nca-bg-secondary);
+    border-left: 1px solid var(--nca-border);
+    overflow-y: auto;
+    animation: nca-slide-in-right var(--nca-transition-slow) ease;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.5);
+}
+
+.nca-panel::-webkit-scrollbar { width: 3px; }
+.nca-panel::-webkit-scrollbar-thumb { background: var(--nca-border-hover); border-radius: 2px; }
+
+/* 居中弹窗 */
+.nca-modal {
+    width: calc(100% - 32px);
+    max-width: 360px;
+    max-height: calc(100% - 60px);
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-lg);
+    overflow-y: auto;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 1px rgba(255, 255, 255, 0.1);
+    animation: nca-scale-in var(--nca-transition-slow) ease;
+}
+
+.nca-modal::-webkit-scrollbar { width: 3px; }
+.nca-modal::-webkit-scrollbar-thumb { background: var(--nca-border-hover); border-radius: 2px; }
+
+.nca-panel-header, .nca-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--nca-border);
+    position: sticky;
+    top: 0;
+    background: var(--nca-bg-secondary);
+    z-index: 1;
+}
+
+.nca-panel-header h3, .nca-modal-header h3 {
+    margin: 0;
+    font-family: var(--nca-font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--nca-fg);
+}
+
+.nca-panel-body, .nca-modal-body {
+    padding: 16px;
+}
+
+/* ─── 表单控件 ─────────────────────────────────────────────── */
+.nca-form-section {
+    margin-bottom: 20px;
+}
+
+.nca-form-section:last-child { margin-bottom: 0; }
+
+.nca-form-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--nca-fg-dim);
+    margin-bottom: 10px;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-radio-group {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 14px;
+    background: var(--nca-bg-primary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    padding: 3px;
+}
+
+.nca-radio-btn {
+    flex: 1;
+    padding: 7px 12px;
+    border: none;
+    background: transparent;
+    color: var(--nca-fg-dim);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    text-align: center;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.3px;
+}
+
+.nca-radio-btn.selected {
+    background: var(--nca-accent-dim);
+    color: var(--nca-accent);
+    font-weight: 600;
+    box-shadow: 0 0 8px var(--nca-accent-dim);
+}
+
+.nca-radio-btn:hover:not(.selected) { color: var(--nca-fg); }
+
+.nca-field {
+    margin-bottom: 12px;
+}
+
+.nca-field label {
+    display: block;
+    font-size: 11px;
+    color: var(--nca-fg-dim);
+    margin-bottom: 5px;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-field input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--nca-border);
+    background: var(--nca-bg-primary);
+    color: var(--nca-fg);
+    border-radius: var(--nca-radius-sm);
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    outline: none;
+    transition: all var(--nca-transition-fast);
+    box-sizing: border-box;
+}
+
+.nca-field input:focus {
+    border-color: rgba(0, 212, 255, 0.4);
+    box-shadow: 0 0 0 2px var(--nca-accent-dim);
+}
+
+.nca-field input::placeholder { color: var(--nca-fg-muted); }
+
+.nca-field-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.nca-field-row .nca-field { flex: 1; }
+
+/* ─── 按钮 ─────────────────────────────────────────────────── */
+.nca-btn {
+    padding: 8px 14px;
+    border-radius: var(--nca-radius-sm);
+    border: 1px solid var(--nca-border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--nca-fg);
+    cursor: pointer;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    transition: all var(--nca-transition-fast);
+    backdrop-filter: blur(4px);
+    letter-spacing: 0.3px;
+}
+
+.nca-btn:hover {
+    border-color: var(--nca-border-hover);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nca-btn-primary {
+    width: 100%;
+    padding: 11px;
+    background: var(--nca-accent);
+    border-color: var(--nca-accent);
+    color: #000;
+    font-weight: 700;
+    margin-top: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.nca-btn-primary:hover {
+    box-shadow: 0 0 20px var(--nca-accent-glow);
+    transform: translateY(-1px);
+}
+
+.nca-btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.nca-btn-sm {
+    padding: 6px 12px;
+    font-size: 10px;
+}
+
+.nca-btn-danger {
+    background: var(--nca-error);
+    border-color: var(--nca-error);
+    color: #fff;
+    font-weight: 600;
+}
+
+.nca-btn-danger:hover {
+    box-shadow: 0 0 12px var(--nca-error-dim);
+}
+
+.nca-btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--nca-fg-dim);
+}
+
+.nca-btn-ghost:hover { color: var(--nca-fg); }
+
+/* ─── 创建项目对话框 ──────────────────────────────────────── */
+.nca-create-preview {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--nca-bg-code);
+    border-radius: var(--nca-radius-sm);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    border: 1px solid var(--nca-border);
+    letter-spacing: 0.3px;
+}
+
+.nca-create-preview.valid {
+    border-color: rgba(16, 185, 129, 0.3);
+    color: var(--nca-green);
+}
+
+.nca-input-error {
+    border-color: var(--nca-error) !important;
+    box-shadow: 0 0 0 2px var(--nca-error-dim) !important;
+}
+
+.nca-input-valid {
+    border-color: rgba(16, 185, 129, 0.4) !important;
+    box-shadow: 0 0 0 2px var(--nca-green-dim) !important;
+}
+
+.nca-error-text {
+    color: var(--nca-error);
+    font-size: 10px;
+    margin-top: 5px;
+    font-family: var(--nca-font-mono);
+}
+
+/* ─── Toast 提示 ──────────────────────────────────────────── */
+.nca-toast {
+    position: absolute;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 18px;
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    animation: nca-toast-in 0.3s ease, nca-toast-out 0.3s ease 2s forwards;
+    backdrop-filter: blur(8px);
+}
+
+/* ─── 确认对话框 ──────────────────────────────────────────── */
+.nca-confirm-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    justify-content: flex-end;
+}
+
+/* ─── 隐藏状态 ─────────────────────────────────────────────── */
+.nca-sessions.collapsed .nca-session-list,
+.nca-sessions.collapsed .nca-new-session-btn {
+    display: none;
+}
+
+/* ─── 空会话列表 ──────────────────────────────────────────── */
+.nca-session-empty {
+    text-align: center;
+    padding: 14px;
+    font-size: 11px;
+    color: var(--nca-fg-muted);
+    font-family: var(--nca-font-mono);
+    letter-spacing: 0.5px;
+}
+
+/* ─── 底部版本信息栏 ──────────────────────────────────────── */
+.nca-footer-version {
+    margin-top: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 14px;
+    height: 36px;
+    box-sizing: border-box;
+    font-size: 12px;
+    color: #555;
+    font-family: var(--nca-font-mono);
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--nca-bg-primary);
+    letter-spacing: 0.3px;
+}
+
+/* ─── 工具介绍页 ──────────────────────────────────────────── */
+.nca-about-page {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    padding: 24px 16px;
+    overflow-y: auto;
+    gap: 16px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity var(--nca-transition-slow), transform var(--nca-transition-slow);
+}
+
+.nca-about-page.visible {
+    display: flex;
+    opacity: 1;
+    transform: translateY(0);
+    animation: nca-slide-up-fade var(--nca-transition-slow) ease;
+}
+
+.nca-about-brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.nca-about-logo {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--nca-accent-dim);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    border-radius: var(--nca-radius-lg);
+    box-shadow: 0 0 24px var(--nca-accent-dim);
+}
+
+.nca-about-logo svg {
+    width: 24px;
+    height: 24px;
+}
+
+.nca-about-logo svg path {
+    stroke: var(--nca-accent);
+    stroke-width: 1.5;
+    fill: none;
+    animation: nca-glow-pulse 3s ease-in-out infinite;
+}
+
+.nca-about-title {
+    margin: 0;
+    font-family: var(--nca-font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--nca-fg);
+    text-transform: uppercase;
+}
+
+.nca-about-version {
+    font-family: var(--nca-font-mono);
+    font-size: 12px;
+    color: var(--nca-accent);
+    letter-spacing: 1px;
+}
+
+.nca-about-divider {
+    width: 80%;
+    max-width: 260px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--nca-accent-dim), var(--nca-accent), var(--nca-accent-dim), transparent);
+    border-radius: 1px;
+}
+
+.nca-about-desc {
+    margin: 0;
+    font-size: 13px;
+    color: var(--nca-fg-dim);
+    text-align: center;
+    line-height: 1.6;
+}
+
+.nca-about-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+    max-width: 300px;
+}
+
+.nca-about-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 14px 10px;
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    transition: all var(--nca-transition-fast);
+    text-align: center;
+}
+
+.nca-about-card:hover {
+    border-color: rgba(0, 212, 255, 0.3);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 16px var(--nca-accent-dim);
+    transform: translateY(-2px);
+}
+
+.nca-about-card-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.nca-about-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--nca-fg);
+    font-family: var(--nca-font-mono);
+}
+
+.nca-about-card-desc {
+    font-size: 10px;
+    color: var(--nca-fg-muted);
+}
+
+.nca-about-github {
+    font-family: var(--nca-font-mono);
+    font-size: 11px;
+    color: var(--nca-fg-dim);
+    text-decoration: none;
+    padding: 6px 12px;
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-about-github:hover {
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+    box-shadow: 0 0 12px var(--nca-accent-dim);
+}
+
+.nca-about-back-btn {
+    margin-top: 8px;
+    padding: 8px 24px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    color: var(--nca-fg);
+    font-family: var(--nca-font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    backdrop-filter: blur(4px);
+}
+
+.nca-about-back-btn:hover {
+    border-color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 16px var(--nca-accent-dim);
+    color: var(--nca-accent);
+}
