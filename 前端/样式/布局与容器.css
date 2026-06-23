@@ -1,0 +1,105 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 布局与容器
+   根容器 .nca-container、主内容区 .nca-main-content
+   以及标签页切换栏 .nc-tab-bar / .nc-tab / .nc-panel
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 标签页切换栏 ─────────────────────────────────────────── */
+.nc-tab-bar {
+    display: flex;
+    gap: 0;
+    padding: var(--nca-space-sm) var(--nca-space-md) 0;
+    border-bottom: 1px solid var(--nca-border);
+    flex-shrink: 0;
+}
+
+.nc-tab {
+    flex: 1;
+    padding: var(--nca-space-sm) 0;
+    border: none;
+    background: var(--nca-bg-tinted);
+    color: var(--nca-fg-dim);
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all var(--nca-transition-fast);
+    text-align: center;
+}
+
+.nc-tab:hover {
+    color: var(--nca-fg);
+    background: var(--nca-surface);
+}
+
+.nc-tab.active {
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    border-bottom: 2px solid var(--nca-accent);
+    text-shadow: 0 0 var(--nca-space-sm) var(--nca-accent-glow);
+}
+
+.nc-panel {
+    flex: 1;
+    overflow: hidden;
+    background: var(--nca-bg-primary);
+}
+
+/* ─── 容器布局 ─────────────────────────────────────────────── */
+.nca-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    min-height: 100%;
+    width: 100%;
+    color: var(--nca-fg);
+    font-family: var(--nca-font-body);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    background: var(--nca-bg-primary);
+    position: relative;
+}
+
+/* ─── 主内容区 ─────────────────────────────────────────────── */
+.nca-main-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ─── 浅色主题：确保根容器与标签栏正确响应 ────────────────────
+   主题类挂载在本插件自有根 .nca-sidebar-root 上，需为该根显式指定
+   背景色，避免宿主深色背景透过透明的 .nc-tab-bar 显现；同时通过
+   双类选择器把作用域限定在本插件，杜绝对 ComfyUI 共享容器的污染。 */
+.nca-sidebar-root.nca-theme-light {
+    background: var(--nca-bg-primary);
+}
+
+.nca-theme-light .nc-tab-bar {
+    background: var(--nca-bg-secondary);
+}
+
+.nca-theme-light .nc-tab {
+    background: transparent;
+}
+
+.nca-theme-light .nc-tab:hover {
+    background: var(--nca-hover-overlay);
+}
+
+.nca-theme-light .nc-tab.active {
+    background: var(--nca-surface);
+    text-shadow: none;
+}
+
+.nca-theme-light .nc-panel {
+    background: var(--nca-bg-primary);
+}
+
+.nca-theme-light .nca-container {
+    background: var(--nca-bg-primary);
+}

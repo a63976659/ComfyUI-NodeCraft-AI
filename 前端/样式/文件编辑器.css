@@ -1,0 +1,312 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 文件编辑器
+   Tab 栏切换 / 文件树 / 代码编辑区 / 工具栏
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── Tab 栏 ──────────────────────────────────────────────── */
+.nca-file-editor-tabs {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-2xs);
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-bottom: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+}
+
+.nca-file-editor-tab {
+    padding: var(--nca-space-xs) var(--nca-space-lg);
+    border: 1px solid transparent;
+    border-radius: var(--nca-radius-sm);
+    background: transparent;
+    color: var(--nca-fg-dim);
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.3px;
+    user-select: none;
+}
+
+.nca-file-editor-tab:hover:not(.active) {
+    color: var(--nca-fg);
+    background: var(--nca-hover-overlay);
+}
+
+.nca-file-editor-tab.active {
+    background: var(--nca-accent-dim);
+    color: var(--nca-accent);
+    border-color: var(--nca-accent-glow);
+    font-weight: 600;
+    box-shadow: 0 0 6px var(--nca-accent-dim);
+}
+
+/* ─── Tab 内容区容器 ──────────────────────────────────────── */
+.nca-file-editor-tab-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ─── 编辑 Tab 主容器（flex row: 文件树 + 编辑区）────────── */
+.nca-file-editor-container {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ─── 文件树 ──────────────────────────────────────────────── */
+.nca-file-editor-tree {
+    width: 200px;
+    min-width: 160px;
+    max-width: 240px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--nca-border);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: var(--nca-space-sm) 0;
+    background: var(--nca-bg-primary);
+}
+
+.nca-file-editor-tree::-webkit-scrollbar { width: 4px; }
+.nca-file-editor-tree::-webkit-scrollbar-track { background: var(--nca-scrollbar-track); }
+.nca-file-editor-tree::-webkit-scrollbar-thumb { background: var(--nca-scrollbar-thumb); border-radius: 2px; }
+.nca-file-editor-tree::-webkit-scrollbar-thumb:hover { background: var(--nca-scrollbar-thumb-hover); }
+
+/* 文件树节点 */
+.nca-file-editor-tree details {
+    margin: 0;
+    padding: 0;
+}
+
+.nca-file-editor-tree summary {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    padding: var(--nca-space-2xs) var(--nca-space-sm);
+    padding-left: var(--nca-space-md);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    list-style: none;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nca-file-editor-tree summary::-webkit-details-marker { display: none; }
+
+.nca-file-editor-tree summary::before {
+    content: "▶";
+    font-size: 8px;
+    color: var(--nca-fg-muted);
+    transition: transform var(--nca-transition-fast);
+    flex-shrink: 0;
+}
+
+.nca-file-editor-tree details[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.nca-file-editor-tree summary:hover {
+    color: var(--nca-fg);
+    background: var(--nca-hover-overlay);
+}
+
+/* 文件树中的文件项 */
+.nca-file-editor-tree-file {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    padding: var(--nca-space-2xs) var(--nca-space-sm);
+    padding-left: var(--nca-space-xl);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+}
+
+.nca-file-editor-tree-file:hover {
+    color: var(--nca-fg);
+    background: var(--nca-hover-overlay);
+}
+
+.nca-file-editor-tree-file.active {
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    font-weight: 600;
+}
+
+/* 嵌套缩进 */
+.nca-file-editor-tree details details > summary {
+    padding-left: calc(var(--nca-space-md) + var(--nca-space-md));
+}
+
+.nca-file-editor-tree details details .nca-file-editor-tree-file {
+    padding-left: calc(var(--nca-space-xl) + var(--nca-space-md));
+}
+
+.nca-file-editor-tree details details details > summary {
+    padding-left: calc(var(--nca-space-md) + var(--nca-space-md) + var(--nca-space-md));
+}
+
+.nca-file-editor-tree details details details .nca-file-editor-tree-file {
+    padding-left: calc(var(--nca-space-xl) + var(--nca-space-md) + var(--nca-space-md));
+}
+
+/* ─── 代码编辑区右侧 ─────────────────────────────────────── */
+.nca-file-editor-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--nca-bg-primary);
+}
+
+/* ─── 工具栏 ──────────────────────────────────────────────── */
+.nca-file-editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-bottom: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+    min-height: 32px;
+}
+
+.nca-file-editor-filename {
+    flex: 1;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+}
+
+.nca-file-editor-filename .dirty-mark {
+    color: var(--nca-warning);
+    font-weight: 700;
+    margin-left: var(--nca-space-2xs);
+}
+
+.nca-file-editor-toolbar-btn {
+    padding: var(--nca-space-2xs) var(--nca-space-sm);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    background: transparent;
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    white-space: nowrap;
+}
+
+.nca-file-editor-toolbar-btn:hover:not(:disabled) {
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+}
+
+.nca-file-editor-toolbar-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.nca-file-editor-toolbar-btn.save-btn:not(:disabled) {
+    color: var(--nca-green);
+    border-color: var(--nca-green-border);
+}
+
+.nca-file-editor-toolbar-btn.save-btn:hover:not(:disabled) {
+    background: var(--nca-green-dim);
+}
+
+/* ─── Textarea 编辑区 ─────────────────────────────────────── */
+.nca-file-editor-textarea {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: var(--nca-bg-code);
+    color: var(--nca-fg);
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    line-height: 1.6;
+    padding: var(--nca-space-md);
+    resize: none;
+    outline: none;
+    tab-size: 4;
+    white-space: pre;
+    overflow: auto;
+}
+
+.nca-file-editor-textarea::placeholder {
+    color: var(--nca-fg-muted);
+    font-style: italic;
+}
+
+.nca-file-editor-textarea::-webkit-scrollbar { width: 6px; height: 6px; }
+.nca-file-editor-textarea::-webkit-scrollbar-track { background: var(--nca-scrollbar-track); }
+.nca-file-editor-textarea::-webkit-scrollbar-thumb { background: var(--nca-scrollbar-thumb); border-radius: 3px; }
+.nca-file-editor-textarea::-webkit-scrollbar-thumb:hover { background: var(--nca-scrollbar-thumb-hover); }
+
+/* ─── 空状态提示 ──────────────────────────────────────────── */
+.nca-file-editor-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nca-fg-muted);
+    font-size: 13px;
+    font-family: var(--nca-font-body);
+    text-align: center;
+    padding: var(--nca-space-xl);
+}
+
+.nca-file-editor-empty-icon {
+    font-size: 32px;
+    margin-bottom: var(--nca-space-sm);
+    opacity: 0.5;
+}
+
+/* ─── 加载状态 ────────────────────────────────────────────── */
+.nca-file-editor-loading {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--nca-fg-dim);
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    gap: var(--nca-space-sm);
+}
+
+.nca-file-editor-loading::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--nca-border);
+    border-top-color: var(--nca-accent);
+    border-radius: 50%;
+    animation: nca-spin 0.8s linear infinite;
+}
+
+@keyframes nca-spin {
+    to { transform: rotate(360deg); }
+}

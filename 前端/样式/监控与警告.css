@@ -1,0 +1,65 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 监控与警告
+   监控面板 .nca-metrics-grid / .nca-metric-card / .nca-metric-label / .nca-metric-value
+   视觉能力警告横幅 .nca-vision-warning 与关闭按钮
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 监控面板 ──────────────────────────────────────────── */
+.nca-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-md);
+}
+
+.nca-metric-card {
+    background: var(--nca-btn-secondary-bg);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    padding: var(--nca-space-md);
+    text-align: center;
+}
+
+.nca-metric-label {
+    font-size: 11px;
+    color: var(--nca-fg-dim);
+    margin-bottom: var(--nca-space-xs);
+}
+
+.nca-metric-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--nca-green);
+    font-family: var(--nca-font-mono);
+}
+
+/* ─── 视觉能力警告横幅 ──────────────────────────────────── */
+.nca-vision-warning {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    margin: 0 var(--nca-space-sm) var(--nca-space-xs) var(--nca-space-sm);
+    background: var(--nca-warning-bg);
+    border: 1px solid var(--nca-warning-border);
+    border-radius: var(--nca-radius-sm);
+    font-size: 12px;
+    color: var(--nca-warning);
+    animation: nca-fade-in var(--nca-transition-normal) ease;
+}
+
+.nca-vision-warning .nca-warning-close {
+    margin-left: auto;
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 14px;
+    line-height: 1;
+    padding: var(--nca-space-2xs) var(--nca-space-xs);
+    border-radius: var(--nca-radius-sm);
+    transition: opacity var(--nca-transition-fast);
+}
+
+.nca-vision-warning .nca-warning-close:hover {
+    opacity: 1;
+    background: var(--nca-warning-bg);
+}

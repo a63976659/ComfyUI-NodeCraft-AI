@@ -1,0 +1,213 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 响应式设计
+   所有 @media 媒体查询，按断点覆盖前面的基础样式
+   - 平板适配（≤768px）
+   - 手机适配（≤480px）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ============================================
+   响应式设计 - 媒体查询
+   ============================================ */
+
+/* 平板适配 (≤768px) */
+@media (max-width: 768px) {
+    .nca-container {
+        font-size: 13px;
+    }
+
+    .nca-tab-nav {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 0 var(--nca-space-sm);
+    }
+
+    .nca-tab-btn {
+        font-size: 12px;
+        padding: var(--nca-space-xs) var(--nca-space-md);
+    }
+
+    /* 对话框适配 */
+    .nc-sync-modal {
+        width: 90%;
+        max-width: none;
+    }
+
+    .nca-modal {
+        width: calc(100% - var(--nca-space-lg));
+        max-width: none;
+    }
+
+    /* 消息区域 */
+    .nca-messages {
+        padding: var(--nca-space-sm);
+    }
+
+    .nca-msg-body {
+        max-width: 90%;
+    }
+
+    /* 设置面板适配 */
+    .nca-panel {
+        max-width: 100%;
+    }
+
+    /* 登录面板适配 */
+    .nca-login-panel,
+    .nca-login-modal {
+        width: calc(100% - var(--nca-space-lg));
+        max-width: none;
+    }
+
+    /* 可视化面板适配 */
+    .nca-viz-panel {
+        max-width: 100%;
+    }
+
+    /* 品牌栏缩小间距 */
+    .nca-header {
+        padding: 0 var(--nca-space-sm);
+        height: 46px;
+        gap: var(--nca-space-xs);
+    }
+
+    .nca-brand-text {
+        font-size: 11px;
+        letter-spacing: 1px;
+    }
+
+    /* 版本信息栏 */
+    .nca-footer-version {
+        height: 30px;
+        padding: 0 var(--nca-space-sm);
+        font-size: 10px;
+    }
+
+    /* 状态栏 */
+    .nca-status-bar {
+        padding: 0 var(--nca-space-sm);
+        height: 24px;
+        font-size: 9px;
+    }
+
+    /* 文件树列表 */
+    .nc-folder-item {
+        font-size: 11px;
+        padding: var(--nca-space-xs) var(--nca-space-sm);
+    }
+
+    .nc-folder-list {
+        max-height: 120px;
+    }
+}
+
+/* 手机适配 (≤480px) */
+@media (max-width: 480px) {
+    /* 字体缩小 */
+    .nca-container {
+        font-size: 12px;
+    }
+
+    /* 输入区精简 */
+    .nca-input-area {
+        padding: var(--nca-space-xs);
+    }
+
+    .nca-input-wrapper {
+        padding: var(--nca-space-xs) var(--nca-space-sm);
+    }
+
+    /* 对话框全屏 */
+    .nc-sync-modal {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        max-width: 100vw;
+    }
+
+    .nca-modal {
+        width: 100%;
+        max-height: 100%;
+        border-radius: 0;
+    }
+
+    /* 设置面板适配 */
+    .nca-panel {
+        max-width: 100%;
+        width: 100%;
+    }
+
+    /* 登录面板：手机全屏 */
+    .nca-login-panel,
+    .nca-login-modal {
+        width: 100%;
+        max-width: 100vw;
+        border-radius: 0;
+    }
+
+    /* 可视化面板：手机全屏 */
+    .nca-viz-panel {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 0;
+    }
+
+    /* Tab 导航 */
+    .nca-tab-nav {
+        padding: 0 var(--nca-space-xs);
+        gap: 0;
+    }
+
+    .nca-tab-btn {
+        font-size: 11px;
+        padding: var(--nca-space-xs) var(--nca-space-sm);
+    }
+
+    /* 品牌栏 */
+    .nca-header {
+        padding: 0 var(--nca-space-sm);
+        height: 42px;
+    }
+
+    .nca-brand-text {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+    }
+
+    /* 版本信息栏 */
+    .nca-footer-version {
+        height: 28px;
+        font-size: 9px;
+    }
+
+    /* 消息区域 */
+    .nca-messages {
+        padding: var(--nca-space-xs);
+    }
+
+    .nca-msg-body {
+        max-width: 95%;
+        padding: var(--nca-space-sm) var(--nca-space-md);
+        font-size: 12px;
+    }
+
+    /* 文件树 */
+    .nc-folder-item {
+        font-size: 11px;
+        padding: var(--nca-space-xs) var(--nca-space-sm);
+    }
+
+    .nc-folder-selector {
+        padding: var(--nca-space-xs) var(--nca-space-sm);
+    }
+
+    /* 关于页面 */
+    .nca-about-grid {
+        grid-template-columns: 1fr;
+        max-width: 100%;
+    }
+
+    .nca-about-title {
+        font-size: 14px;
+        letter-spacing: 1.5px;
+    }
+}

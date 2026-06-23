@@ -1,0 +1,471 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 消息与聊天
+   消息容器 .nca-messages、欢迎空状态 .nca-welcome、消息气泡 .nca-msg
+   Markdown 渲染（代码块、行内代码、复制按钮）
+   加载脉冲点 .nca-loading、流式光标 .nca-streaming-cursor、停止按钮 .nca-stop-btn
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 消息区域 ─────────────────────────────────────────────── */
+.nca-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--nca-space-lg) var(--nca-space-md);
+    scroll-behavior: smooth;
+}
+
+.nca-messages::-webkit-scrollbar { width: 4px; }
+.nca-messages::-webkit-scrollbar-track { background: var(--nca-scrollbar-track); }
+.nca-messages::-webkit-scrollbar-thumb { background: var(--nca-scrollbar-thumb); border-radius: var(--nca-space-2xs); }
+.nca-messages::-webkit-scrollbar-thumb:hover { background: var(--nca-scrollbar-thumb-hover); }
+
+/* ─── 欢迎空状态 ──────────────────────────────────────────── */
+.nca-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    padding: var(--nca-space-2xl);
+    gap: var(--nca-space-md);
+}
+
+.nca-welcome-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--nca-accent-dim);
+    border: 1px solid var(--nca-accent-glow);
+    border-radius: var(--nca-radius-lg);
+    font-size: 22px;
+    box-shadow: 0 0 var(--nca-space-xl) var(--nca-accent-dim);
+}
+
+.nca-welcome h3 {
+    margin: 0;
+    font-family: var(--nca-font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--nca-fg);
+    letter-spacing: 1px;
+}
+
+.nca-welcome p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    max-width: 260px;
+    line-height: 1.7;
+}
+
+.nca-quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nca-space-xs);
+    margin-top: var(--nca-space-sm);
+    width: 100%;
+    max-width: 250px;
+}
+
+.nca-quick-action {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    border-radius: var(--nca-radius);
+    border: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    color: var(--nca-fg);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all var(--nca-transition-fast);
+    text-align: left;
+    backdrop-filter: blur(4px);
+}
+
+.nca-quick-action:hover {
+    border-color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 var(--nca-space-lg) var(--nca-accent-dim);
+    transform: translateX(2px);
+}
+
+.nca-quick-action .qa-icon {
+    font-size: 14px;
+    width: var(--nca-space-xl);
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* ─── 消息气泡 ─────────────────────────────────────────────── */
+.nca-msg {
+    margin-bottom: var(--nca-space-lg);
+    animation: nca-slide-up-fade var(--nca-transition-slow) ease;
+}
+
+.nca-msg-header {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    margin-bottom: var(--nca-space-xs);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-msg-header .msg-role {
+    color: var(--nca-fg-dim);
+}
+
+.nca-msg-header .msg-time {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--nca-fg-muted);
+    font-weight: 400;
+}
+
+.nca-msg.user .msg-role { color: var(--nca-green); }
+.nca-msg.assistant .msg-role { color: var(--nca-purple); }
+.nca-msg.system .msg-role { color: var(--nca-fg-muted); }
+
+.nca-msg-body {
+    padding: var(--nca-space-md) var(--nca-space-md);
+    border-radius: var(--nca-radius);
+    font-size: 13px;
+    line-height: 1.7;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    position: relative;
+}
+
+/* 用户消息 - 右侧深灰 */
+.nca-msg.user .nca-msg-body {
+    background: var(--nca-bg-tertiary);
+    border: 1px solid var(--nca-border);
+    margin-left: var(--nca-space-xl);
+}
+
+/* AI 消息 - 左侧紫色渐变边条 */
+.nca-msg.assistant .nca-msg-body {
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-left: 2px solid;
+    border-image: linear-gradient(180deg, var(--nca-purple), var(--nca-accent)) 1;
+    margin-right: var(--nca-space-sm);
+}
+
+/* 系统消息 */
+.nca-msg.system .nca-msg-body {
+    background: transparent;
+    border: 1px dashed var(--nca-border-hover);
+    color: var(--nca-fg-dim);
+    text-align: center;
+    font-size: 12px;
+}
+
+/* ─── Markdown 渲染 ────────────────────────────────────────── */
+.nca-msg-body p { margin: 0 0 var(--nca-space-sm); }
+.nca-msg-body p:last-child { margin-bottom: 0; }
+
+.nca-msg-body code {
+    background: var(--nca-bg-code);
+    padding: var(--nca-space-2xs) var(--nca-space-xs);
+    border-radius: var(--nca-radius-sm);
+    font-family: var(--nca-font-mono);
+    font-size: 11.5px;
+    color: var(--nca-accent);
+    border: 1px solid var(--nca-border);
+}
+
+.nca-msg-body pre {
+    position: relative;
+    margin: var(--nca-space-sm) 0;
+    border-radius: var(--nca-radius);
+    overflow: hidden;
+}
+
+.nca-msg-body pre code {
+    display: block;
+    padding: var(--nca-space-md) var(--nca-space-lg);
+    padding-top: var(--nca-space-3xl);
+    background: var(--nca-bg-code);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    color: var(--nca-fg);
+}
+
+.nca-code-lang {
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    font-size: 9px;
+    font-family: var(--nca-font-mono);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--nca-fg-muted);
+    background: var(--nca-hover-overlay);
+    border-bottom: 1px solid var(--nca-border);
+    border-right: 1px solid var(--nca-border);
+    border-radius: 0 0 var(--nca-radius-sm) 0;
+}
+
+.nca-code-copy {
+    position: absolute;
+    top: var(--nca-space-xs);
+    right: var(--nca-space-xs);
+    padding: var(--nca-space-2xs) var(--nca-space-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    font-size: 10px;
+    font-family: var(--nca-font-mono);
+    opacity: 0;
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-msg-body pre:hover .nca-code-copy { opacity: 1; }
+.nca-code-copy:hover {
+    background: var(--nca-accent);
+    color: var(--nca-bg-primary);
+    border-color: var(--nca-accent);
+}
+
+.nca-code-copy.copied {
+    background: var(--nca-green);
+    color: var(--nca-bg-primary);
+    border-color: var(--nca-green);
+    opacity: 1;
+}
+
+/* ─── 加载动画（脉冲光点）──────────────────────────────────── */
+.nca-loading {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    padding: var(--nca-space-md) var(--nca-space-lg);
+}
+
+.nca-loading-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--nca-accent);
+    animation: nca-loading-pulse 1.4s infinite ease-in-out;
+}
+
+.nca-loading-dot:nth-child(1) { animation-delay: 0s; }
+.nca-loading-dot:nth-child(2) { animation-delay: 0.2s; }
+.nca-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ═══════════════════════════════════════════════════════════════
+   流式响应样式
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 流式光标闪烁 */
+.nca-streaming-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: var(--nca-accent);
+    animation: nca-blink 1s infinite;
+    margin-left: var(--nca-space-2xs);
+    vertical-align: text-bottom;
+}
+
+/* 停止生成按钮 */
+.nca-stop-btn {
+    background: var(--nca-error-dim);
+    border: 1px solid var(--nca-error);
+    color: var(--nca-error);
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all var(--nca-transition-fast);
+    margin-bottom: var(--nca-space-xs);
+    width: 100%;
+    text-align: center;
+}
+
+.nca-stop-btn:hover {
+    background: var(--nca-error-dim);
+    border-color: var(--nca-error);
+}
+
+.nca-stop-btn:active {
+    transform: scale(0.98);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   消息编辑重生成（DeepSeek 风格）
+   - 用户消息 hover 显示 ✎ 按钮，点击后行内 textarea 编辑
+   - 确认 → 截断后续历史 → 重新生成 AI 回复
+   ═════════════════════════════════════════════════════════════ */
+
+/* ─── 编辑入口按钮：hover-显示、青色辉光 ────────────── */
+.nca-msg-header .nca-msg-edit-btn {
+    margin-left: var(--nca-space-xs);
+    padding: var(--nca-space-2xs) var(--nca-space-sm);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    border-radius: var(--nca-radius-sm);
+    opacity: 0;
+    transform: translateY(-1px);
+    transition: opacity var(--nca-transition-fast),
+                color var(--nca-transition-fast),
+                background var(--nca-transition-fast),
+                border-color var(--nca-transition-fast),
+                box-shadow var(--nca-transition-fast);
+    font-family: var(--nca-font-mono);
+}
+
+/* role 后紧跟编辑按钮（无 timestamp 场景）时推到右边 */
+.nca-msg-header .msg-role + .nca-msg-edit-btn {
+    margin-left: auto;
+}
+
+/* hover 用户气泡或聚焦按钮本身时显现 */
+.nca-msg.user:hover .nca-msg-edit-btn,
+.nca-msg-edit-btn:focus-visible {
+    opacity: 1;
+}
+
+.nca-msg-edit-btn:hover {
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    border-color: var(--nca-accent-glow);
+    box-shadow: 0 0 var(--nca-space-sm) var(--nca-accent-dim);
+}
+
+.nca-msg-edit-btn:focus-visible {
+    outline: none;
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+    box-shadow: 0 0 0 2px var(--nca-accent-dim);
+}
+
+/* ─── 编辑中的气泡：body 被 textarea + 动作条接管 ───────────── */
+.nca-msg.user.nca-msg-editing .nca-msg-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-md);
+    background: var(--nca-bg-secondary);
+    border-color: var(--nca-accent-glow);
+    box-shadow: 0 0 0 1px var(--nca-accent-glow), 0 0 var(--nca-space-md) var(--nca-accent-dim);
+    animation: nca-fade-in var(--nca-transition-normal) ease;
+}
+
+.nca-edit-textarea {
+    width: 100%;
+    min-height: 60px;
+    max-height: 300px;
+    resize: vertical;
+    background: var(--nca-bg-input);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    font-family: var(--nca-font-body);
+    font-size: 13px;
+    line-height: 1.7;
+    box-sizing: border-box;
+    outline: none;
+    transition: border-color var(--nca-transition-fast),
+                box-shadow var(--nca-transition-fast),
+                background var(--nca-transition-fast);
+}
+
+.nca-edit-textarea::placeholder { color: var(--nca-fg-muted); }
+
+.nca-edit-textarea:hover {
+    border-color: var(--nca-border-hover);
+}
+
+.nca-edit-textarea:focus {
+    border-color: var(--nca-accent);
+    box-shadow: 0 0 0 2px var(--nca-accent-dim);
+}
+
+.nca-edit-textarea::-webkit-scrollbar { width: 4px; }
+.nca-edit-textarea::-webkit-scrollbar-track { background: var(--nca-scrollbar-track); }
+.nca-edit-textarea::-webkit-scrollbar-thumb { background: var(--nca-scrollbar-thumb); border-radius: var(--nca-space-2xs); }
+.nca-edit-textarea::-webkit-scrollbar-thumb:hover { background: var(--nca-scrollbar-thumb-hover); }
+
+.nca-edit-actions {
+    display: flex;
+    gap: var(--nca-space-sm);
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.nca-edit-confirm,
+.nca-edit-cancel {
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-radius: var(--nca-radius-sm);
+    border: 1px solid var(--nca-border);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    letter-spacing: 0.4px;
+    line-height: 1.4;
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-edit-confirm {
+    background: var(--nca-btn-primary-bg);
+    color: var(--nca-btn-primary-text);
+    border-color: transparent;
+    box-shadow: 0 0 var(--nca-space-sm) var(--nca-accent-dim);
+}
+
+.nca-edit-confirm:hover {
+    filter: brightness(1.15);
+    transform: translateY(-1px);
+    box-shadow: 0 var(--nca-space-2xs) var(--nca-space-md) var(--nca-accent-glow);
+}
+
+.nca-edit-confirm:active {
+    transform: translateY(0);
+    filter: brightness(0.95);
+}
+
+.nca-edit-cancel {
+    background: var(--nca-btn-secondary-bg);
+    color: var(--nca-btn-secondary-text);
+}
+
+.nca-edit-cancel:hover {
+    background: var(--nca-hover-overlay);
+    border-color: var(--nca-border-hover);
+    color: var(--nca-fg);
+}
+
+.nca-edit-cancel:active {
+    transform: translateY(1px);
+}
+
+.nca-edit-confirm:focus-visible,
+.nca-edit-cancel:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--nca-accent-dim);
+}
