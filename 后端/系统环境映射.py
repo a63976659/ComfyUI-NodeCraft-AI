@@ -1,5 +1,21 @@
+import os
 from pathlib import Path
 import folder_paths
+
+
+def 是否云端环境() -> bool:
+    """判定当前是否运行于魔搭创空间云端环境。
+
+    依据项目既有约定，``China_MAINLAND`` 或 ``MODELSCOPE_SPACE`` 任一环境变量
+    存在（值非空）即视为云端 Space 部署；否则视为本地 ComfyUI 插件运行环境。
+
+    本函数为跨模块通用工具：认证中间件、CSRF 校验等均依赖它来决定是否启用
+    与公网安全相关的策略（如 JWT 默认密钥告警、CSRF 校验）。
+    """
+    for 变量名 in ("China_MAINLAND", "MODELSCOPE_SPACE"):
+        if (os.environ.get(变量名) or "").strip():
+            return True
+    return False
 
 
 def get_plugin_root():

@@ -1,9 +1,42 @@
 from pathlib import Path
 import json
+import logging
+import os
 import re
+import shutil
+import uuid
 from datetime import datetime
 
+# 有效的会话类型常量（统一定义，供路由层与本模块共享）
+_VALID_SESSION_TYPES = ("develop", "optimize", "visualize")
+
+try:
+    from cryptography.fernet import Fernet
+except Exception as _e:  # ImportError 或 cryptography Rust 绑定加载异常等
+    Fernet = None
+    logging.getLogger("NodeCraftAI.文件读写").warning(
+        f"cryptography 模块加载失败，加密配置功能不可用: {_e}"
+    )
+
+logger = logging.getLogger("文件读写操作")
+
 from .系统环境映射 import get_plugin_root
+
+
+# ─── 文件大小限制 ──────────────────────────────────────────
+# 单次读取插件文件的最大字节数，超过则拒绝读取，防止内存溢出
+MAX_READ_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def _备份文件(file_path: Path):
+    """写入前备份原文件为 .bak（覆盖式，仅保留最近一份）"""
+    if file_path.exists():
+        bak_path = file_path.with_suffix(file_path.suffix + '.bak')
+        try:
+            shutil.copy2(file_path, bak_path)
+        except Exception:
+            # 备份失败不应阻塞写入主流程
+            pass
 
 
 # ─── 数据目录管理 ──────────────────────────────────────────
@@ -24,52 +57,189 @@ def get_sessions_dir():
 
 # ─── 会话 CRUD ─────────────────────────────────────────────
 
-def load_sessions_list():
-    """加载所有会话摘要（不含 messages），按创建时间倒序排列"""
+def load_sessions_list(session_type=None):
+    """加载所有会话摘要（不含 messages），按创建时间倒序排列
+
+    参数：
+        session_type: 可选，按界面类型过滤会话。有效值: "develop"/"optimize"/"visualize"。
+                      为 None 时返回全部会话。
+
+    向后兼容：旧会话文件没有 type 字段时，默认为 "develop"。
+    """
     sessions_dir = get_sessions_dir()
     sessions = []
     for filepath in sessions_dir.glob("*.json"):
         try:
             data = json.loads(filepath.read_text(encoding="utf-8"))
+            # 旧会话文件没有 type 字段时默认为 "develop"，保持向后兼容
+            sess_type = data.get("type", "develop")
             sessions.append({
                 "id": data.get("id", ""),
                 "title": data.get("title", "未命名会话"),
                 "created_at": data.get("created_at", ""),
+                "updated_at": data.get("updated_at", ""),
                 "plugin_folder": data.get("plugin_folder", ""),
+                "type": sess_type,
             })
         except Exception:
             continue
+    # 按界面类型过滤（仅当传入有效类型时生效）
+    if session_type is not None and session_type in _VALID_SESSION_TYPES:
+        sessions = [s for s in sessions if s.get("type") == session_type]
     # 按创建时间倒序
     sessions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return sessions
 
 
+def create_session(title="新会话", plugin_folder="", session_type="develop"):
+    """创建新会话并写入文件
+
+    参数：
+        title: 会话标题
+        plugin_folder: 关联的插件文件夹名称
+        session_type: 会话所属界面类型，有效值: "develop"/"optimize"/"visualize"，
+                      非法值默认回退为 "develop"
+
+    返回：新创建的会话数据 dict
+    """
+    if session_type not in _VALID_SESSION_TYPES:
+        session_type = "develop"
+
+    session_id = str(uuid.uuid4())
+    now = datetime.now().isoformat(timespec="seconds")
+
+    session_data = {
+        "id": session_id,
+        "title": title,
+        "created_at": now,
+        "plugin_folder": plugin_folder,
+        "type": session_type,
+        "messages": [],
+    }
+    save_session(session_data)
+    return session_data
+
+
 def load_session(session_id):
-    """加载指定会话完整数据，不存在返回 None"""
+    """加载指定会话完整数据，不存在返回 None
+
+    Bug 36 修复：JSON 解析失败时尝试加载 .bak 备份并恢复主文件。
+    """
     filepath = get_sessions_dir() / f"{session_id}.json"
     if not filepath.exists():
         return None
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.warning("会话文件损坏 [%s]: %s，尝试加载备份", session_id, e)
+        bak_file = filepath.with_suffix(filepath.suffix + ".bak")
+        if bak_file.exists():
+            try:
+                with open(bak_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 恢复成功，覆盖损坏文件
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                logger.info("从备份恢复会话 [%s] 成功", session_id)
+                return data
+            except Exception as be:
+                logger.error("备份文件也无法加载 [%s]: %s", session_id, be)
+        return None
 
 
 def save_session(session_data):
-    """保存会话数据到文件"""
+    """保存会话数据到文件（写入前自动备份原文件为 .bak，覆盖式保留最近一份）
+
+    Bug 14 修复：写入前对 session_data 进行结构与必需字段校验，
+    避免写入空数据 / 错误类型 / 缺少 id 的非法会话文件。
+    """
+    # ─── 数据完整性校验 ────────────────────────────────────
+    if not session_data or not isinstance(session_data, dict):
+        raise ValueError("会话数据格式不正确")
     session_id = session_data.get("id")
     if not session_id:
         raise ValueError("会话数据缺少 id 字段")
+    if 'messages' in session_data and not isinstance(session_data['messages'], list):
+        raise ValueError("会话消息列表格式不正确")
+
     filepath = get_sessions_dir() / f"{session_id}.json"
+    # 写入前备份原文件，避免写入失败导致数据丢失
+    _备份文件(filepath)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(session_data, f, ensure_ascii=False, indent=2)
 
 
-def delete_session(session_id):
-    """删除会话文件，返回是否成功"""
+def delete_session(session_id, delete_folder=False):
+    """删除会话文件，可选同时删除关联的插件文件夹
+
+    参数：
+        session_id: 会话 ID
+        delete_folder: 是否同时删除会话关联的 plugin_folder。删除失败不会阻止会话本身删除。
+
+    返回：是否成功删除会话文件
+    """
     filepath = get_sessions_dir() / f"{session_id}.json"
-    if filepath.exists():
-        filepath.unlink()
-        return True
-    return False
+    if not filepath.exists():
+        return False
+
+    # 若需要删除文件夹，先读取会话数据获取 plugin_folder
+    if delete_folder:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                session_data = json.load(f)
+            plugin_folder = session_data.get("plugin_folder", "")
+            if plugin_folder:
+                _删除插件文件夹(plugin_folder)
+        except Exception as e:
+            logger.warning("删除关联文件夹失败: %s", e)
+            # 文件夹删除失败不影响会话删除
+
+    # 删除会话 JSON 文件
+    filepath.unlink()
+    return True
+
+
+def _删除插件文件夹(plugin_folder_name):
+    """安全删除关联的插件文件夹
+
+    安全校验：
+    1. 路径必须在 custom_nodes 目录内
+    2. 不能是 ComfyUI-NodeCraft-AI 自身
+    3. 必须是目录（非文件）
+    4. 防止路径穿越（不允许 ../ 等）
+    """
+    from .系统环境映射 import get_custom_nodes_path
+
+    # 基础校验：文件夹名不能为空或包含路径分隔符
+    if (not plugin_folder_name
+            or '/' in plugin_folder_name
+            or '\\' in plugin_folder_name
+            or '..' in plugin_folder_name):
+        raise ValueError(f"非法的文件夹名称: {plugin_folder_name}")
+
+    custom_nodes_dir = get_custom_nodes_path()
+    target_path = custom_nodes_dir / plugin_folder_name
+
+    # 解析后确保仍在 custom_nodes 内（防止符号链接等穿越）
+    try:
+        resolved = target_path.resolve()
+        resolved.relative_to(custom_nodes_dir.resolve())
+    except (ValueError, OSError):
+        raise ValueError(f"路径安全校验失败: {plugin_folder_name}")
+
+    # 不允许删除自身
+    self_name = "ComfyUI-NodeCraft-AI"
+    if resolved.name == self_name or plugin_folder_name == self_name:
+        raise ValueError("不允许删除 NodeCraft AI 自身目录")
+
+    # 必须是目录
+    if not resolved.is_dir():
+        raise ValueError(f"目标不是目录: {plugin_folder_name}")
+
+    # 执行删除
+    shutil.rmtree(resolved)
+    logger.info("已删除插件文件夹: %s", resolved)
 
 
 # ─── 设置管理 ─────────────────────────────────────────────
@@ -83,12 +253,94 @@ _DEFAULT_SETTINGS = {
     "api_key": "",
     "temperature": 0.2,
     "max_tokens": 4096,
+    "github_token": "",
+    "github_username": "",
+    "github_default_repo": "",
+    "github_visibility": "public",
 }
+
+_SENSITIVE_KEYS = ["github_token", "api_key"]
+
+
+# ─── 加密/解密 ─────────────────────────────────────────────
+
+def _get_cipher_key_path():
+    """获取加密密钥文件路径"""
+    data_dir = get_data_dir()
+    return data_dir / ".密钥"
+
+
+def _set_secure_permissions(file_path):
+    """设置文件权限为仅所有者可读写 (0o600)
+
+    Windows 不完全支持 Unix 权限位，失败时静默忽略。
+    """
+    try:
+        os.chmod(str(file_path), 0o600)
+    except (OSError, NotImplementedError):
+        # Windows 或其他不支持 chmod 的平台：跳过权限设置
+        pass
+
+
+def _get_cipher():
+    """获取或创建 Fernet 加密器
+
+    若 cryptography 模块加载失败（Fernet is None），返回 None，调用方需做降级处理。
+    """
+    if Fernet is None:
+        return None
+    key_path = _get_cipher_key_path()
+    if not key_path.exists():
+        key = Fernet.generate_key()
+        key_path.write_bytes(key)
+        # 仅所有者可读写，防止密钥被其他用户读取
+        _set_secure_permissions(key_path)
+    else:
+        key = key_path.read_bytes()
+    return Fernet(key)
+
+
+def _encrypt_value(value):
+    """加密字符串
+
+    cryptography 不可用时降级为明文存储（返回原值），并记录一次警告。
+    """
+    if not value:
+        return ""
+    if Fernet is None:
+        logger.warning("cryptography 不可用，敏感字段将以明文形式保存")
+        return value
+    try:
+        cipher = _get_cipher()
+        if cipher is None:
+            return value
+        return cipher.encrypt(value.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return value
+
+
+def _decrypt_value(value):
+    """解密字符串
+
+    cryptography 不可用时按明文返回，避免设置加载失败导致整个后端不可用。
+    """
+    if not value:
+        return ""
+    if Fernet is None:
+        # 旧版本写入的密文在此场景下无法解密，原样返回避免抛错
+        return value
+    try:
+        cipher = _get_cipher()
+        if cipher is None:
+            return value
+        return cipher.decrypt(value.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return ""
 
 
 def load_settings():
     """加载设置，不存在则返回默认值"""
-    filepath = get_data_dir() / "settings.json"
+    filepath = get_data_dir() / "设置.json"
     if not filepath.exists():
         return dict(_DEFAULT_SETTINGS)
     try:
@@ -97,6 +349,10 @@ def load_settings():
         # 合并默认值，确保新增字段有默认值
         result = dict(_DEFAULT_SETTINGS)
         result.update(saved)
+        # 解密敏感字段
+        for key in _SENSITIVE_KEYS:
+            if key in result and result[key]:
+                result[key] = _decrypt_value(result[key])
         return result
     except Exception:
         return dict(_DEFAULT_SETTINGS)
@@ -104,9 +360,14 @@ def load_settings():
 
 def save_settings(settings):
     """保存设置到文件"""
-    filepath = get_data_dir() / "settings.json"
+    filepath = get_data_dir() / "设置.json"
+    # 加密敏感字段后再写入
+    settings_to_save = dict(settings)
+    for key in _SENSITIVE_KEYS:
+        if key in settings_to_save and settings_to_save[key]:
+            settings_to_save[key] = _encrypt_value(settings_to_save[key])
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+        json.dump(settings_to_save, f, ensure_ascii=False, indent=2)
 
 
 # ─── 插件脚手架 ───────────────────────────────────────────
@@ -130,9 +391,11 @@ def create_plugin_scaffold(base_path, plugin_name):
 
         init_content = (
             "# AI 自动生成的 ComfyUI 节点注册入口\n"
+            "WEB_DIRECTORY = \"./界面与静态资源\"\n"
+            "\n"
             "NODE_CLASS_MAPPINGS = {}\n"
             "NODE_DISPLAY_NAME_MAPPINGS = {}\n"
-            "__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']\n"
+            "__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']\n"
         )
         (target_path / "__init__.py").write_text(init_content, encoding="utf-8")
 
@@ -146,3 +409,134 @@ def create_plugin_scaffold(base_path, plugin_name):
         return True, f"✅ 成功创建插件目录：{plugin_name}。已初始化 __init__.py。", str(target_path)
     except Exception as e:
         return False, f"❌ 创建目录时发生错误: {str(e)}", ""
+
+
+# ─── 插件文件操作 ─────────────────────────────────────────
+
+# 扫描时忽略的目录
+_IGNORED_DIRS = {'__pycache__', '.git', 'node_modules', '.venv', 'venv', '.eggs', '.tox', '.mypy_cache'}
+
+
+def scan_plugin_file_tree(plugin_path):
+    """递归扫描插件目录，返回文件树结构
+    
+    返回: list[dict]，每个 dict 含 name, path(相对路径), type(file/dir), children(仅目录)
+    """
+    plugin_path = Path(plugin_path)
+    if not plugin_path.exists():
+        return []
+    
+    def _scan(current_path, relative_base):
+        items = []
+        try:
+            entries = sorted(current_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
+        except PermissionError:
+            return items
+        
+        for entry in entries:
+            # 跳过隐藏文件和忽略目录
+            if entry.name.startswith('.') or entry.name in _IGNORED_DIRS:
+                continue
+            
+            rel_path = str(entry.relative_to(plugin_path)).replace('\\', '/')
+            
+            if entry.is_dir():
+                children = _scan(entry, relative_base)
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "dir",
+                    "children": children
+                })
+            elif entry.is_file():
+                try:
+                    file_size = entry.stat().st_size
+                    if file_size < 0:
+                        file_size = 0
+                except (OSError, ValueError) as e:
+                    logger.warning("文件大小检查失败: %s - %s", entry, e)
+                    file_size = 0
+                items.append({
+                    "name": entry.name,
+                    "path": rel_path,
+                    "type": "file",
+                    "size": file_size
+                })
+        return items
+    
+    return _scan(plugin_path, plugin_path)
+
+
+def read_plugin_file(plugin_path, relative_file_path):
+    """读取插件内指定文件的内容
+    
+    参数:
+        plugin_path: 插件根目录的完整路径
+        relative_file_path: 相对于插件根目录的文件路径
+    
+    返回: (success: bool, content_or_error: str)
+    """
+    plugin_path = Path(plugin_path)
+    file_path = (plugin_path / relative_file_path).resolve()
+    
+    # 安全校验：确保文件路径在插件目录内
+    try:
+        file_path.relative_to(plugin_path.resolve())
+    except ValueError:
+        return False, "安全错误：文件路径超出插件目录范围"
+    
+    if not file_path.exists():
+        return False, f"文件不存在: {relative_file_path}"
+    
+    if not file_path.is_file():
+        return False, f"不是文件: {relative_file_path}"
+    
+    # 检查文件大小（防止内存溢出），添加异常值保护
+    try:
+        file_size = file_path.stat().st_size
+        if file_size < 0 or file_size > MAX_READ_FILE_SIZE:
+            return False, f"文件大小 ({file_size / (1024*1024):.1f}MB) 超过限制 ({MAX_READ_FILE_SIZE // (1024*1024)}MB)"
+    except (OSError, ValueError) as e:
+        logger.warning("文件大小检查失败: %s - %s", file_path, e)
+        return False, f"文件大小检查失败: {e}"
+    
+    try:
+        content = file_path.read_text(encoding='utf-8')
+        return True, content
+    except UnicodeDecodeError:
+        return False, "无法读取：文件不是 UTF-8 文本格式"
+    except Exception as e:
+        return False, f"读取失败: {str(e)}"
+
+
+def write_plugin_file(plugin_path, relative_file_path, content):
+    """写入/修改插件内指定文件（自动备份）
+    
+    参数:
+        plugin_path: 插件根目录的完整路径
+        relative_file_path: 相对于插件根目录的文件路径
+        content: 要写入的文件内容
+    
+    返回: (success: bool, message: str)
+    """
+    plugin_path = Path(plugin_path)
+    file_path = (plugin_path / relative_file_path).resolve()
+    
+    # 安全校验
+    try:
+        file_path.relative_to(plugin_path.resolve())
+    except ValueError:
+        return False, "安全错误：文件路径超出插件目录范围"
+    
+    try:
+        # 备份已有文件
+        _备份文件(file_path)
+        
+        # 确保父目录存在
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 写入内容
+        file_path.write_text(content, encoding='utf-8')
+        return True, f"成功写入: {relative_file_path}"
+    except Exception as e:
+        return False, f"写入失败: {str(e)}"
