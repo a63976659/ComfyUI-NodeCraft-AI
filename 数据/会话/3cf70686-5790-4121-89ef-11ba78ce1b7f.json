@@ -1,0 +1,13 @@
+{
+  "id": "3cf70686-5790-4121-89ef-11ba78ce1b7f",
+  "title": "002",
+  "created_at": "2026-06-15T17:12:44",
+  "plugin_folder": "002",
+  "messages": [
+    {
+      "role": "user",
+      "content": "帮我写一个api插件，支持将即梦的seedance2.0模型",
+      "timestamp": "2026-06-23T17:47:41"
+    }
+  ]
+}
