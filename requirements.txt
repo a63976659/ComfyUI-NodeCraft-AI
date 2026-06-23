@@ -1,0 +1,16 @@
+cryptography>=41.0.0,<44.0.0
+modelscope>=1.9.0,<2.0.0
+PyJWT>=2.8.0,<3.0.0
+strawberry-graphql[aiohttp]>=0.235.0,<1.0.0
+
+# 开发依赖
+pytest>=7.0,<9.0
+pytest-asyncio>=0.21,<1.0
+cryptography
+modelscope
+PyJWT>=2.8.0
+strawberry-graphql[aiohttp]>=0.235.0
+
+# 开发依赖
+pytest>=7.0
+pytest-asyncio>=0.21

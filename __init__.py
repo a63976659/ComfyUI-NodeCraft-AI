@@ -13,11 +13,16 @@ WEB_DIRECTORY = "./前端"
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
-# 3. 导入后端路由，装饰器在模块加载时自动注册
+# 3. 初始化统一日志系统（在导入任何后端模块之前）
+from 后端.日志配置 import 初始化日志系统, 获取日志器
+初始化日志系统()
+logger = 获取日志器("启动")
+
+# 4. 导入后端路由，装饰器在模块加载时自动注册
 try:
     from 后端 import 接口路由
-    print("[AI Coder] 后端接口路由加载成功！")
+    logger.info("后端接口路由加载成功！")
 except Exception as e:
-    print(f"[AI Coder] 后端加载失败: {e}")
+    logger.exception(f"后端加载失败: {e}")
 
 __all__ = ["WEB_DIRECTORY", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
