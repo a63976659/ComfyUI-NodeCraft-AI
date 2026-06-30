@@ -7,6 +7,7 @@
 输入协议（每行一个 JSON）：
   {"action": "load",     "model_path": "...", "settings": {...}}
   {"action": "generate", "messages": [...],  "settings": {...}}
+  {"action": "complete", "messages": [...],  "settings": {...}}
   {"action": "stream",   "messages": [...],  "settings": {...}}
   {"action": "unload"}
   {"action": "status"}
@@ -17,6 +18,8 @@
   {"type": "loaded",   "model_name": "...", "info": "..."}
   {"type": "token",    "content": "..."}
   {"type": "done",     "full_text": "..."}
+  {"status": "success", "response": "..."}    # complete action 专用
+  {"status": "error",   "response": ""}       # complete action 错误
   {"type": "error",    "message": "..."}
   {"type": "status",   "model_loaded": bool, "model_name": "..."}
   {"type": "progress", "message": "..."}
@@ -191,6 +194,8 @@ class ModelWorker:
 
     _IDLE_TTL = 600         # 空闲 10 分钟后自动卸载
     _BLACKLIST_TTL = 300    # 加载失败黑名单 5 分钟
+    # 停止信号哨兵文件：客户端在工具调用中断流后创建，worker 检测后提前停止生成
+    _STOP_FLAG_PATH = Path(__file__).resolve().parent.parent / "数据" / ".stop_stream"
 
     def __init__(self):
         self.model = None
@@ -217,6 +222,28 @@ class ModelWorker:
 
     def _add_to_blacklist(self, name: str):
         self._blacklist[name] = time.time()
+
+    # ----------------------------------------------------------
+    #  停止信号（哨兵文件）
+    # ----------------------------------------------------------
+
+    def _check_stop_flag(self) -> bool:
+        """检查停止信号哨兵文件是否存在，存在则删除并返回 True"""
+        try:
+            if self._STOP_FLAG_PATH.exists():
+                self._STOP_FLAG_PATH.unlink()
+                return True
+        except OSError:
+            pass
+        return False
+
+    def _clear_stop_flag(self):
+        """清除停止信号文件"""
+        try:
+            if self._STOP_FLAG_PATH.exists():
+                self._STOP_FLAG_PATH.unlink()
+        except OSError:
+            pass
 
     # ----------------------------------------------------------
     #  空闲定时器管理
@@ -313,21 +340,27 @@ class ModelWorker:
     #  Chat Template 辅助
     # ----------------------------------------------------------
 
-    def _apply_chat_template(self, messages: list) -> str:
-        """应用 chat template，兼容 Qwen3 的 enable_thinking=False 参数"""
+    def _apply_chat_template(self, messages: list, enable_thinking: bool = True) -> str:
+        """应用 chat template，支持动态控制 thinking 模式
+
+        Args:
+            messages: 消息列表
+            enable_thinking: 是否启用 thinking 模式。工具调用轮次建议关闭，
+                            避免生成大量思考 token 浪费生成时间。
+        """
         try:
             text = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=False,
+                enable_thinking=enable_thinking,
             )
         except TypeError:
             # 不支持 enable_thinking 参数的模型
             text = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
-            if self.model_name and "Qwen3" in self.model_name:
+            if self.model_name and "Qwen3" in self.model_name and enable_thinking:
                 logger.warning(
                     "⚠️ Qwen3 模型不支持 enable_thinking，建议升级 transformers >= 4.51.0"
                 )
@@ -337,17 +370,27 @@ class ModelWorker:
     #  动态 token 上限计算
     # ----------------------------------------------------------
 
-    def _calc_max_new_tokens(self, prompt_length: int) -> int:
-        """基于 max_position_embeddings 动态计算 max_new_tokens"""
+    def _calc_max_new_tokens(self, prompt_length: int, is_tool_round: bool = False) -> int:
+        """基于 max_position_embeddings 和当前轮次类型动态计算 max_new_tokens
+
+        Args:
+            prompt_length: prompt token 数
+            is_tool_round: 是否为工具调用轮次（非首轮）
+
+        策略：
+        - 首轮（含 thinking）: 上限 8192，给足思考空间
+        - 工具轮次: 上限 8192，与首轮一致，确保 write_plugin_file 有足够空间
+        """
+        cap = 8192
         try:
             ctx_len = getattr(self.model.config, "max_position_embeddings", None)
             if ctx_len and ctx_len > 0:
                 available = int(ctx_len * 0.7) - prompt_length
-                return max(512, min(available, 8192))
+                return max(512, min(available, cap))
         except Exception:
             pass
         # 保守回退
-        return min(4096, max(1024, prompt_length * 3))
+        return min(cap, max(512, prompt_length * 3))
 
     # ----------------------------------------------------------
     #  thinking 标签剥离
@@ -355,11 +398,11 @@ class ModelWorker:
 
     @staticmethod
     def _strip_thinking(text: str) -> str:
-        return re.sub(r"<thinking>[\s\S]*?</thinking>", "", text).strip()
-
-    # ----------------------------------------------------------
-    #  handle_load
-    # ----------------------------------------------------------
+        """剥离思考内容，兼容 Qwen3 的 thinking 和 Qwen3.5 的 think 标签"""
+        # Qwen3.5 使用 <think>...</think>，Qwen3 使用 <thinking>...</thinking>
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text)
+        text = re.sub(r"<thinking>[\s\S]*?</thinking>", "", text)
+        return text.strip()
 
     def handle_load(self, request: dict):
         """加载本地模型（带重试、黑名单、量化配置）"""
@@ -476,25 +519,35 @@ class ModelWorker:
             return
 
         messages = request.get("messages", [])
-        # settings 暂时保留供未来扩展（如 temperature 覆盖）
-        # settings = request.get("settings") or {}
+        settings = request.get("settings") or {}
+        # 从 settings 读取轮次控制参数
+        enable_thinking = settings.get("enable_thinking", True)
+        is_tool_round = settings.get("is_tool_round", False)
 
         # 取消空闲定时器
         self._cancel_idle_timer()
 
-        # 清理消息中的非标准字段
-        sanitized = [
-            {"role": m.get("role"), "content": m.get("content", "")}
-            for m in messages if isinstance(m, dict)
-        ]
+        # 清理消息中的非标准字段（保留 name/tool_calls/tool_call_id 支持 tool 角色）
+        sanitized = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            msg = {"role": m.get("role"), "content": m.get("content", "")}
+            if "name" in m:
+                msg["name"] = m["name"]
+            if "tool_calls" in m:
+                msg["tool_calls"] = m["tool_calls"]
+            if "tool_call_id" in m:
+                msg["tool_call_id"] = m["tool_call_id"]
+            sanitized.append(msg)
 
-        text = self._apply_chat_template(sanitized)
+        text = self._apply_chat_template(sanitized, enable_thinking=enable_thinking)
 
         with self._lock:
             inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
 
         prompt_length = inputs["input_ids"].shape[1]
-        max_new_tokens = self._calc_max_new_tokens(prompt_length)
+        max_new_tokens = self._calc_max_new_tokens(prompt_length, is_tool_round=is_tool_round)
 
         def _generate():
             ctx = (
@@ -505,9 +558,10 @@ class ModelWorker:
                     inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     max_new_tokens=max_new_tokens,
-                    temperature=0.2,
-                    top_p=0.9,
-                    repetition_penalty=1.1,
+                    temperature=0.6,
+                    top_p=0.95,
+                    top_k=20,
+                    repetition_penalty=1.0,
                     do_sample=True,
                     pad_token_id=self.tokenizer.eos_token_id,
                     use_cache=True,
@@ -528,6 +582,88 @@ class ModelWorker:
             send_response({"type": "error", "message": f"推理异常: {exc}"})
 
     # ----------------------------------------------------------
+    #  handle_complete（代码补全专用）
+    # ----------------------------------------------------------
+
+    def handle_complete(self, request: dict):
+        """代码补全专用推理（低温度、短输出、stop_sequences 截断）
+
+        与 handle_generate 的区别：
+        - temperature 从 settings 读取（默认 0.1，而非硬编码 0.6）
+        - max_new_tokens 从 settings 读取（默认 100，而非动态计算）
+        - 生成后检查 stop_sequences 并截断到首次出现位置
+        - 输出格式为 {status, response} 而非 {type, full_text}
+        - 关闭 thinking 模式（补全不需要思考过程）
+        """
+        import torch
+
+        if self.model is None or self.tokenizer is None:
+            send_response({"status": "error", "response": ""})
+            return
+
+        messages = request.get("messages", [])
+        settings = request.get("settings") or {}
+
+        # 自定义推理参数（从 settings 读取，不使用硬编码的 0.6）
+        temperature = settings.get("temperature", 0.1)
+        max_new_tokens = settings.get("max_new_tokens", 100)
+        stop_sequences = settings.get(
+            "stop_sequences", ["\n\n\n", "class ", "def "]
+        )
+
+        # 取消空闲定时器
+        self._cancel_idle_timer()
+
+        # 应用 chat template（关闭 thinking，补全不需要思考过程）
+        text = self._apply_chat_template(messages, enable_thinking=False)
+
+        with self._lock:
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+
+        prompt_length = inputs["input_ids"].shape[1]
+
+        def _generate():
+            ctx = (
+                torch.inference_mode() if _HAS_INFERENCE_MODE else torch.no_grad()
+            )
+            with ctx:
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=0.95,
+                    top_k=20,
+                    repetition_penalty=1.0,
+                    do_sample=True,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,
+                )
+            new_tokens = outputs[0][prompt_length:]
+            return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+        try:
+            result = _generate_with_timeout(_generate, timeout=15)
+            result = self._strip_thinking(result)
+
+            # 检查 stop_sequences 并截断到首次出现位置
+            for seq in stop_sequences:
+                idx = result.find(seq)
+                if idx != -1:
+                    result = result[:idx]
+                    break
+
+            self._reset_idle_timer()
+            send_response({"status": "success", "response": result})
+        except TimeoutError:
+            self._reset_idle_timer()
+            send_response({"status": "error", "response": ""})
+        except Exception as exc:
+            logger.warning(f"代码补全推理异常: {exc}")
+            self._reset_idle_timer()
+            send_response({"status": "error", "response": ""})
+
+    # ----------------------------------------------------------
     #  handle_stream（流式）
     # ----------------------------------------------------------
 
@@ -540,9 +676,16 @@ class ModelWorker:
             return
 
         messages = request.get("messages", [])
+        settings = request.get("settings") or {}
+        # 从 settings 读取轮次控制参数
+        enable_thinking = settings.get("enable_thinking", True)
+        is_tool_round = settings.get("is_tool_round", False)
 
         # 取消空闲定时器
         self._cancel_idle_timer()
+
+        # 清除上一轮可能残留的停止信号
+        self._clear_stop_flag()
 
         # 尝试导入 TextIteratorStreamer
         try:
@@ -551,18 +694,28 @@ class ModelWorker:
         except ImportError:
             streamer_available = False
 
-        sanitized = [
-            {"role": m.get("role"), "content": m.get("content", "")}
-            for m in messages if isinstance(m, dict)
-        ]
+        sanitized = []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            msg = {"role": m.get("role"), "content": m.get("content", "")}
+            if "name" in m:
+                msg["name"] = m["name"]
+            if "tool_calls" in m:
+                msg["tool_calls"] = m["tool_calls"]
+            if "tool_call_id" in m:
+                msg["tool_call_id"] = m["tool_call_id"]
+            sanitized.append(msg)
 
-        text = self._apply_chat_template(sanitized)
+        text = self._apply_chat_template(sanitized, enable_thinking=enable_thinking)
+        logger.info(f"[handle_stream] 模板渲染完成, prompt长度={len(text)}, enable_thinking={enable_thinking}, is_tool_round={is_tool_round}")
 
         with self._lock:
             inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
 
         prompt_length = inputs["input_ids"].shape[1]
-        max_new_tokens = self._calc_max_new_tokens(prompt_length)
+        max_new_tokens = self._calc_max_new_tokens(prompt_length, is_tool_round=is_tool_round)
+        logger.info(f"[handle_stream] 开始生成, input_ids形状={inputs['input_ids'].shape}, max_new_tokens={max_new_tokens}")
 
         if streamer_available:
             self._do_stream(inputs, prompt_length, max_new_tokens)
@@ -584,9 +737,10 @@ class ModelWorker:
             "input_ids": inputs["input_ids"],
             "attention_mask": inputs["attention_mask"],
             "max_new_tokens": max_new_tokens,
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "repetition_penalty": 1.1,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "repetition_penalty": 1.0,
             "do_sample": True,
             "pad_token_id": self.tokenizer.eos_token_id,
             "streamer": streamer,
@@ -601,6 +755,8 @@ class ModelWorker:
 
         full_text = ""
         deadline = time.time() + 180  # 180 秒超时
+        _token_count = 0
+        _stop_check_interval = 10  # 每 10 个 token 检查一次停止信号
 
         try:
             for token_text in streamer:
@@ -608,7 +764,15 @@ class ModelWorker:
                     send_response({"type": "error", "message": "流式推理超时（180秒）"})
                     self._reset_idle_timer()
                     return
+                # 定期检查停止信号（客户端在工具调用后设置，避免无用生成）
+                if _token_count > 0 and _token_count % _stop_check_interval == 0:
+                    if self._check_stop_flag():
+                        logger.info(f"[_do_stream] 收到停止信号，提前终止（已生成 {_token_count} tokens）")
+                        break
                 if token_text:
+                    if _token_count == 0:
+                        logger.info(f"[_do_stream] 收到第一个token: {repr(token_text[:80])}")
+                    _token_count += 1
                     full_text += token_text
                     send_response({"type": "token", "content": token_text})
         except Exception as exc:
@@ -619,6 +783,7 @@ class ModelWorker:
         finally:
             gen_thread.join(timeout=5)
 
+        logger.info(f"[_do_stream] 生成完成, 新token数={_token_count}")
         full_text = self._strip_thinking(full_text)
         self._reset_idle_timer()
         send_response({"type": "done", "full_text": full_text})
@@ -636,9 +801,10 @@ class ModelWorker:
                     inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     max_new_tokens=max_new_tokens,
-                    temperature=0.2,
-                    top_p=0.9,
-                    repetition_penalty=1.1,
+                    temperature=0.6,
+                    top_p=0.95,
+                    top_k=20,
+                    repetition_penalty=1.0,
                     do_sample=True,
                     pad_token_id=self.tokenizer.eos_token_id,
                     use_cache=True,
@@ -726,6 +892,8 @@ class ModelWorker:
                     self.handle_load(request)
                 elif action == "generate":
                     self.handle_generate(request)
+                elif action == "complete":
+                    self.handle_complete(request)
                 elif action == "stream":
                     self.handle_stream(request)
                 elif action == "unload":

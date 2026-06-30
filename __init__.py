@@ -18,11 +18,33 @@ from 后端.日志配置 import 初始化日志系统, 获取日志器
 初始化日志系统()
 logger = 获取日志器("启动")
 
+# 输出项目版本号
+from 后端.系统环境映射 import 项目版本
+logger.info(f"NodeCraft AI v{项目版本} 启动中...")
+
 # 4. 导入后端路由，装饰器在模块加载时自动注册
 try:
     from 后端 import 接口路由
     logger.info("后端接口路由加载成功！")
 except Exception as e:
     logger.exception(f"后端加载失败: {e}")
+
+# 5. 在路由注册完成后执行数据迁移
+try:
+    import asyncio
+    from 后端.数据迁移 import 执行迁移
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 如果循环已在运行，创建任务
+            loop.create_task(执行迁移())
+        else:
+            loop.run_until_complete(执行迁移())
+    except RuntimeError:
+        # 没有事件循环，创建新的
+        asyncio.run(执行迁移())
+    logger.info("数据迁移执行完成")
+except Exception as e:
+    logger.warning(f"数据迁移执行失败（忽略）: {e}")
 
 __all__ = ["WEB_DIRECTORY", "NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
