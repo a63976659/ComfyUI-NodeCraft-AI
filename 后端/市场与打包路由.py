@@ -11,8 +11,8 @@ from pathlib import Path
 from aiohttp import web
 
 from .路由公共 import (
-    _check_auth, _error_response, _success_response, _rate_limiter,
-    _分页参数, _分页响应,
+    _error_response, _success_response, _rate_limiter,
+    _分页参数, _分页响应, 服务器内部错误,
 )
 from .系统环境映射 import get_default_llm_path, get_custom_nodes_path
 from .模板市场 import TemplateMarket
@@ -21,9 +21,6 @@ from .插件打包 import PluginPackager
 from .日志配置 import 获取日志器
 
 logger = 获取日志器("市场与打包路由")
-
-# M5: 错误消息脱敏 - 通用服务器错误文案
-_服务器内部错误 = "服务器内部错误，请稍后重试"
 
 
 # ─── 单例实例 ────────────────────────────────────────────
@@ -54,10 +51,6 @@ async def package_plugin(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         data = await request.json()
         plugin_name = data.get("plugin_name", "")
         options = data.get("options", {})
@@ -80,16 +73,12 @@ async def package_plugin(request):
             return _error_response(result["message"])
     except Exception as e:
         logger.error(f"插件打包异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def list_packages(request):
     """列出已打包的文件（支持分页：?page=1&page_size=20，最大 page_size=100）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         packages = await asyncio.to_thread(_plugin_packager.list_packages) or []
         page, page_size, paginated = _分页参数(request)
         if paginated:
@@ -99,16 +88,12 @@ async def list_packages(request):
         return _success_response(packages)
     except Exception as e:
         logger.error(f"列出打包文件异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def download_package(request):
     """下载打包文件（返回文件流）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         filename = request.match_info['filename']
 
         # 安全检查：防止路径穿越
@@ -131,7 +116,7 @@ async def download_package(request):
         })
     except Exception as e:
         logger.error(f"下载打包文件异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 # ─── 模型市场 ──────────────────────────────────────────────────
@@ -139,9 +124,6 @@ async def download_package(request):
 async def model_market_search(request):
     """搜索模型（支持 HuggingFace / ModelScope）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         query = request.query.get('q', '')
         task = request.query.get('task', 'text-generation')
         limit = int(request.query.get('limit', '10'))
@@ -151,17 +133,23 @@ async def model_market_search(request):
         market = _get_market(source)
         results = await market.search_models(query, task=task, limit=limit)
         return _success_response(results)
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning(
+            f"模型市场搜索超时（source={request.query.get('source', 'huggingface')}, "
+            f"q={request.query.get('q', '')}）"
+        )
+        return web.json_response(
+            {"success": False, "error": "模型市场服务暂时不可用，请稍后重试", "data": None},
+            status=502
+        )
     except Exception as e:
         logger.error(f"模型市场搜索异常: {e}", exc_info=True)
-        return _error_response(_服务器内部错误, 500)
+        return _error_response(服务器内部错误, 500)
 
 
 async def model_market_info(request):
     """获取模型详细信息（支持 HuggingFace / ModelScope）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         model_id = request.match_info['model_id']
         source = request.query.get('source', 'huggingface')
         market = _get_market(source)
@@ -171,7 +159,7 @@ async def model_market_info(request):
         return _success_response(info)
     except Exception as e:
         logger.error(f"获取模型信息异常: {e}", exc_info=True)
-        return _error_response(_服务器内部错误, 500)
+        return _error_response(服务器内部错误, 500)
 
 
 async def model_market_download(request):
@@ -180,10 +168,6 @@ async def model_market_download(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         model_id = data.get('model_id', '')
@@ -197,15 +181,12 @@ async def model_market_download(request):
         return _success_response({"model_id": model_id, "source": source, "status": "downloading"}, message="下载任务已启动")
     except Exception as e:
         logger.error(f"启动模型下载异常: {e}", exc_info=True)
-        return _error_response(_服务器内部错误, 500)
+        return _error_response(服务器内部错误, 500)
 
 
 async def model_market_local(request):
     """列出已下载的模型（支持分页：?page=1&page_size=20，最大 page_size=100）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         models = await asyncio.to_thread(_model_market.list_local_models) or []
         page, page_size, paginated = _分页参数(request)
         if paginated:
@@ -215,15 +196,12 @@ async def model_market_local(request):
         return _success_response(models)
     except Exception as e:
         logger.error(f"获取本地模型列表异常: {e}", exc_info=True)
-        return _error_response(_服务器内部错误, 500)
+        return _error_response(服务器内部错误, 500)
 
 
 async def model_market_download_status(request):
     """获取下载进度"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         model_id = request.query.get('model_id', '')
         if not model_id:
             return _error_response("缺少 model_id")
@@ -231,7 +209,7 @@ async def model_market_download_status(request):
         return _success_response(status)
     except Exception as e:
         logger.error(f"获取下载状态异常: {e}", exc_info=True)
-        return _error_response(_服务器内部错误, 500)
+        return _error_response(服务器内部错误, 500)
 
 
 # ─── 模板市场 ─────────────────────────────────────────────────
@@ -239,9 +217,6 @@ async def model_market_download_status(request):
 async def list_templates(request):
     """获取所有可用模板列表（支持分页：?page=1&page_size=20，最大 page_size=100）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         templates = await asyncio.to_thread(_template_market.list_templates) or []
         page, page_size, paginated = _分页参数(request)
         payload = _分页响应(templates, page, page_size, paginated, list_key="templates",
@@ -249,7 +224,7 @@ async def list_templates(request):
         return web.json_response(payload)
     except Exception as e:
         logger.error(f"获取模板列表异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def create_from_template(request):
@@ -258,10 +233,6 @@ async def create_from_template(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         template_id = data.get("template_id", "")
@@ -280,7 +251,7 @@ async def create_from_template(request):
         return web.json_response(result, status=status)
     except Exception as e:
         logger.error(f"从模板创建异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 def register_市场与打包路由(routes):

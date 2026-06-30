@@ -11,11 +11,12 @@
         ...
 """
 import json
-import logging
 from pathlib import Path
 from datetime import datetime
 
-logger = logging.getLogger("NodeCraftAI.数据迁移")
+from .日志配置 import 获取日志器
+
+logger = 获取日志器(__name__)
 
 _数据根 = Path(__file__).resolve().parent.parent / "数据"
 _版本文件 = _数据根 / "migration_version.json"

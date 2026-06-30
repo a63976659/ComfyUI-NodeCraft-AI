@@ -18,12 +18,10 @@ from typing import Optional, Set, List, Dict, Any
 from aiohttp import web
 
 from .系统环境映射 import get_plugin_root
+from .路由公共 import 服务器内部错误
 from .日志配置 import 获取日志器
 
 logger = 获取日志器("魔搭同步")
-
-# M5: 错误消息脱敏 - 通用服务器错误文案
-_服务器内部错误 = "服务器内部错误，请稍后重试"
 
 
 # ─── 常量配置 ─────────────────────────────────────────────
@@ -31,6 +29,44 @@ SYNC_INTERVAL = 30                  # 批量同步间隔（秒）
 RETRY_BASE_DELAY = 60               # 指数退避基础延时（秒）
 RETRY_MAX_DELAY = 600               # 最大退避延时（秒）
 DEFAULT_DATASET_REPO = "NodeCraft-AI/community-data"
+
+
+# ─── 断路器 ───────────────────────────────────────────────
+
+class 断路器:
+    """简单断路器：连续失败 N 次后熔断，等待恢复时间后半开探测"""
+    _CLOSED = "closed"          # 正常
+    _OPEN = "open"              # 熔断
+    _HALF_OPEN = "half_open"    # 半开（探测）
+
+    def __init__(self, 失败阈值: int = 5, 恢复秒数: int = 60):
+        self._状态 = self._CLOSED
+        self._失败计数 = 0
+        self._上次失败时间 = 0.0
+        self._失败阈值 = 失败阈值
+        self._恢复秒数 = 恢复秒数
+
+    def 是否熔断(self) -> bool:
+        """检查是否应该跳过请求"""
+        if self._状态 == self._OPEN:
+            if time.time() - self._上次失败时间 > self._恢复秒数:
+                self._状态 = self._HALF_OPEN
+                return False  # 允许探测
+            return True  # 熔断中
+        return False  # 正常或半开
+
+    def 记录成功(self):
+        """请求成功"""
+        self._失败计数 = 0
+        self._状态 = self._CLOSED
+
+    def 记录失败(self):
+        """请求失败"""
+        self._失败计数 += 1
+        self._上次失败时间 = time.time()
+        if self._失败计数 >= self._失败阈值:
+            self._状态 = self._OPEN
+            logger.warning(f"[魔搭同步] 断路器已熔断，{self._恢复秒数}s 后尝试探测")
 
 
 # ─── ModelScope 同步引擎 ──────────────────────────────────
@@ -55,6 +91,9 @@ class ModelScopeSync:
         self._current_delay: int = RETRY_BASE_DELAY
         self._loop_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+
+        # 断路器
+        self._断路器 = 断路器(失败阈值=5, 恢复秒数=60)
 
         # 数据根目录（同步范围）
         self.data_root = get_plugin_root() / "数据"
@@ -260,9 +299,20 @@ class ModelScopeSync:
 
         使用线程池避免 SDK 阻塞事件循环。
         """
+        # 断路器检查：熔断状态下直接跳过
+        if self._断路器.是否熔断():
+            logger.warning("[魔搭同步] 断路器已熔断，跳过本次上传")
+            return {"success": False, "error": "断路器熔断中，请稍后重试"}
+
         try:
-            return await asyncio.to_thread(self._upload_batch_sync, files)
+            result = await asyncio.to_thread(self._upload_batch_sync, files)
+            if result.get("success"):
+                self._断路器.记录成功()
+            else:
+                self._断路器.记录失败()
+            return result
         except Exception as e:
+            self._断路器.记录失败()
             return {"success": False, "error": f"上传异常: {e}"}
 
     def _upload_batch_sync(self, files: List[str]) -> Dict[str, Any]:
@@ -343,16 +393,29 @@ class ModelScopeSync:
                 pass
             raise
 
-    def _带重试执行(self, fn, max_retries: int = 3):
-        """带指数退避的同步执行包装（用于 ModelScope SDK 调用）
+    def _带重试执行(self, fn, max_retries: int = 3, 超时秒: int = 60):
+        """带指数退避和超时的同步执行包装（用于 ModelScope SDK 调用）
 
+        使用线程池超时包装，防止 SDK 调用永久阻塞。
         仅对超时/连接/5xx 等临时性错误进行重试。
         """
         import time
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
         last_exc = None
         for attempt in range(max_retries):
+            executor = ThreadPoolExecutor(max_workers=1)
             try:
-                return fn()
+                future = executor.submit(fn)
+                result = future.result(timeout=超时秒)
+                return result
+            except FutureTimeoutError:
+                last_exc = TimeoutError(f"SDK 调用超时（{超时秒}s）")
+                wait = 2 ** attempt
+                logger.warning(
+                    "[魔搭同步] SDK 调用超时（尝试 %d/%d），%ds后重试",
+                    attempt + 1, max_retries, wait,
+                )
+                time.sleep(wait)
             except Exception as e:
                 last_exc = e
                 msg = str(e).lower()
@@ -368,6 +431,8 @@ class ModelScopeSync:
                     e, wait, attempt + 1, max_retries,
                 )
                 time.sleep(wait)
+            finally:
+                executor.shutdown(wait=False)
         raise last_exc
 
     # ─── 云端拉取逻辑 ──────────────────────────
@@ -710,7 +775,7 @@ async def 手动同步(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": result.get("error")}, status=400)
     except Exception as e:
         logger.error(f"手动同步异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def 同步状态(request: web.Request) -> web.Response:
@@ -720,7 +785,7 @@ async def 同步状态(request: web.Request) -> web.Response:
         return web.json_response({"success": True, "data": engine.get_status()})
     except Exception as e:
         logger.error(f"获取同步状态异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def 上传文件(request: web.Request) -> web.Response:
@@ -754,7 +819,7 @@ async def 上传文件(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": result.get("error")}, status=400)
     except Exception as e:
         logger.error(f"上传文件到云端异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def 手动拉取(request: web.Request) -> web.Response:
@@ -766,7 +831,7 @@ async def 手动拉取(request: web.Request) -> web.Response:
         return web.json_response(result, status=status_code)
     except Exception as e:
         logger.error(f"手动拉取云端数据异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 # ─── 路由注册 ─────────────────────────────────────────────

@@ -3,11 +3,10 @@
 提供子路由模块共享的工具与单例：
 - 统一响应工厂 _error_response / _success_response
 - 速率限制器 RateLimiter（_rate_limiter 单例）
-- 条件认证检查 _check_auth
 - 附件与文件树格式化 _format_attachment_descriptions / _format_file_tree
 - 智能体模块（llm_client / local_model_client / tool_router / ContextManager）
 - 性能监控收集器 _metrics_collector
-- 模块加载副作用：注册 auth_manager / audit_logger / 审计中间件到 PromptServer.app
+- 模块加载副作用：注册 audit_logger / 审计中间件到 PromptServer.app
 """
 from aiohttp import web
 import sys
@@ -18,13 +17,15 @@ from collections import defaultdict
 
 from server import PromptServer
 
-from .系统环境映射 import get_plugin_root, 是否云端环境
-from .认证中间件 import AuthManager
+from .系统环境映射 import get_plugin_root, 是否云端环境, 项目版本
 from .审计日志 import AuditLogger, audit_middleware
 from .性能监控 import get_metrics_collector
 from .日志配置 import 获取日志器
 
 logger = 获取日志器("路由公共")
+
+# M5: 错误消息脱敏 - 通用服务器错误响应
+服务器内部错误 = "服务器内部错误，请稍后重试"
 
 
 # ─── 智能体模块导入 ───────────────────────────────────────
@@ -36,28 +37,30 @@ try:
     from 智能体.模型客户端 import AICoderClient, LocalModelClient
     from 智能体.工具路由器 import ToolRouter
     from 智能体.记忆与上下文压缩 import ContextManager
+    from 智能体.跨会话记忆 import 跨会话记忆管理器
+    from 智能体.项目上下文分析 import 项目上下文分析器
 
     llm_client = AICoderClient()
     local_model_client = LocalModelClient()
     tool_router = ToolRouter()
+    _项目上下文分析器 = 项目上下文分析器()
     _agent_available = True
 except ImportError as e:
     logger.exception(f"智能体模块加载失败（聊天功能不可用）: {e}")
     llm_client = None
     local_model_client = None
     tool_router = None
+    _项目上下文分析器 = None
     ContextManager = None
     _agent_available = False
 
 
-# ─── 初始化认证与审计 ─────────────────────────────────────
+# ─── 初始化审计 ─────────────────────────────────────
 _data_dir = Path(__file__).parent.parent / "数据"
-_auth_manager = AuthManager(_data_dir / "用户")
 _audit_logger = AuditLogger(_data_dir / "审计日志")
 
 # 注册到 PromptServer app
 _app = PromptServer.instance.app
-_app['auth_manager'] = _auth_manager
 _app['audit_logger'] = _audit_logger
 
 # 注册审计中间件
@@ -65,6 +68,13 @@ _app.middlewares.append(audit_middleware)
 
 # 性能监控收集器
 _metrics_collector = get_metrics_collector()
+
+# 跨会话记忆管理器（全局单例）
+# 智能体模块不可用时降级为 None
+if _agent_available:
+    _记忆管理器 = 跨会话记忆管理器(_data_dir / "记忆")
+else:
+    _记忆管理器 = None
 
 
 # ─── P3: 本地模型后台预热（消除首次推理 30s+ 加载延迟）─────────
@@ -165,14 +175,33 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window = window_seconds
         self._requests = defaultdict(list)
+        self._cleanup_counter = 0
+        self._cleanup_interval = 100  # 每 100 次调用执行一次过期 IP 清理
 
     def is_allowed(self, client_ip: str) -> bool:
         now = time.time()
         self._requests[client_ip] = [t for t in self._requests[client_ip] if now - t < self.window]
+
+        # 周期性清理过期的 IP 记录（避免长时间运行后 _requests 字典无限增长）
+        self._cleanup_counter += 1
+        if self._cleanup_counter >= self._cleanup_interval:
+            self._cleanup_counter = 0
+            self._cleanup_expired(now)
+
         if len(self._requests[client_ip]) >= self.max_requests:
             return False
         self._requests[client_ip].append(now)
         return True
+
+    def _cleanup_expired(self, now: float):
+        """清理最后一条记录的时间戳超过 2 倍窗口时间的 IP"""
+        expired_threshold = now - self.window * 2
+        expired_ips = [
+            ip for ip, timestamps in self._requests.items()
+            if not timestamps or timestamps[-1] < expired_threshold
+        ]
+        for ip in expired_ips:
+            del self._requests[ip]
 
 
 _rate_limiter = RateLimiter()
@@ -223,6 +252,57 @@ async def _检查上传大小(request, 上限字节: int = _最大上传字节):
     return None
 
 
+# ─── 幂等缓存（M8：防止网络重试导致重复提交）──────────────────
+
+class 幂等缓存器:
+    """短期内存幂等缓存，防止网络重试导致重复提交"""
+    def __init__(self, ttl秒=60):
+        self._缓存 = {}  # key: f"{session_id}:{idempotency_key}" -> (result, timestamp)
+        self._ttl = ttl秒
+
+    def 检查(self, session_id, idempotency_key):
+        """检查是否已存在相同幂等键的请求，返回缓存的响应或 None"""
+        if not idempotency_key:
+            return None
+        key = f"{session_id}:{idempotency_key}"
+        now = time.time()
+        # 清理过期条目
+        self._缓存 = {k: v for k, v in self._缓存.items() if now - v[1] < self._ttl}
+        if key in self._缓存:
+            return self._缓存[key][0]
+        return None
+
+    def 记录(self, session_id, idempotency_key, result):
+        """记录请求结果到缓存"""
+        if not idempotency_key:
+            return
+        key = f"{session_id}:{idempotency_key}"
+        self._缓存[key] = (result, time.time())
+
+
+# 全局实例
+_幂等缓存 = 幂等缓存器(ttl秒=60)
+
+
+# ─── 附件类型白名单校验（H4）──────────────────────────────────
+
+_允许的附件类型 = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "text/plain", "text/markdown", "application/json"}
+
+
+async def _检查附件类型(attachments):
+    """校验附件 MIME 类型是否在白名单内，返回错误响应或 None"""
+    if not attachments:
+        return None
+    for att in attachments:
+        att_type = att.get("type", "") if isinstance(att, dict) else ""
+        if not att_type or att_type not in _允许的附件类型:
+            return web.json_response({
+                "success": False,
+                "error": f"不支持的文件类型: {att_type or '(空)'}"
+            }, status=415)
+    return None
+
+
 # ─── CSRF 校验 ──────────────────────────────────────────────
 
 # 需要 CSRF 校验的写操作 HTTP 方法（GET/HEAD/OPTIONS 等只读方法直接放行）
@@ -233,12 +313,10 @@ _CSRF适用前缀 = ("/ai-coder/", "/v1/ai-coder/", "/v1/nca/", "/nca/")
 
 # CSRF 豁免路径前缀
 # - /static/ 静态资源不涉及状态变更
-# - /graphql GraphQL 端点有自身的安全机制（schema 校验、字段授权等）
 # - 首次认证类端点：用户此时尚未持有 session/CSRF token，必须豁免
 #   · /nca/billing/verify-login   RanKing 账号登录验证（前端 API_VERIFY_LOGIN）
 _CSRF豁免前缀 = (
     "/static/",
-    "/graphql",
     "/nca/billing/verify-login",
 )
 
@@ -251,7 +329,7 @@ def _是CSRF豁免请求(request) -> bool:
        直接全量豁免。
     1. 只读方法（GET/HEAD/OPTIONS 等非写操作）
     2. 路径不在本插件 API 前缀范围内（例如 ComfyUI 自身的 /prompt、/upload）
-    3. 路径以静态资源或 GraphQL 前缀开头
+    3. 路径以静态资源前缀开头
     4. WebSocket 升级请求（Upgrade: websocket）
     """
     # 本地环境完全豁免 CSRF（个人使用，无跨域风险）；仅云端执行后续校验。
@@ -303,31 +381,6 @@ def _校验CSRF令牌(request):
         return web.json_response({"error": "CSRF token missing or invalid"}, status=403)
 
     return None
-
-
-# ─── 条件认证检查 ────────────────────────────────────────────
-
-async def _check_auth(request):
-    """条件认证检查：有 Token 则验证，无 Token 则以匿名身份放行。
-
-    - 已登录用户（Authorization: Bearer ...）：验证 Token，失败返回 401；
-      成功后将 payload 写入 ``request['user']``。
-    - 未登录用户（无 Authorization 头）：以匿名身份放行，
-      ``request['user']`` 不设置；本地模型/本地设置等不需登录的功能可正常使用。
-    - 扣费相关操作由前端与计费代理自行校验登录状态。
-    """
-    auth_manager = request.app.get('auth_manager')
-    if auth_manager and auth_manager.has_users():
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            # 无 Token：匿名放行（不设置 request['user']）
-            return None
-        token = auth_header[7:]
-        payload = auth_manager.verify_token(token)
-        if payload is None:
-            return web.json_response({"success": False, "message": "Token 无效或已过期"}, status=401)
-        request['user'] = payload
-    return None  # 通过认证
 
 
 # ─── 附件与文件树格式化 ────────────────────────────────────

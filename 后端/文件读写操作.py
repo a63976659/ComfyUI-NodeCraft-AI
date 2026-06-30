@@ -1,6 +1,5 @@
 from pathlib import Path
 import json
-import logging
 import os
 import re
 import shutil
@@ -10,15 +9,17 @@ from datetime import datetime
 # 有效的会话类型常量（统一定义，供路由层与本模块共享）
 _VALID_SESSION_TYPES = ("develop", "optimize", "visualize")
 
+from .日志配置 import 获取日志器
+
+logger = 获取日志器(__name__)
+
 try:
     from cryptography.fernet import Fernet
 except Exception as _e:  # ImportError 或 cryptography Rust 绑定加载异常等
     Fernet = None
-    logging.getLogger("NodeCraftAI.文件读写").warning(
+    logger.warning(
         f"cryptography 模块加载失败，加密配置功能不可用: {_e}"
     )
-
-logger = logging.getLogger("文件读写操作")
 
 from .系统环境映射 import get_plugin_root
 
@@ -168,6 +169,13 @@ def save_session(session_data):
     _备份文件(filepath)
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(session_data, f, ensure_ascii=False, indent=2)
+    # 写入成功后清理 .bak 残留（与 write_plugin_file 保持一致）
+    try:
+        bak_path = filepath.with_suffix(filepath.suffix + '.bak')
+        if bak_path.exists():
+            bak_path.unlink()
+    except OSError:
+        pass
 
 
 def delete_session(session_id, delete_folder=False):
@@ -300,15 +308,19 @@ def _get_cipher():
     return Fernet(key)
 
 
-def _encrypt_value(value):
+def _encrypt_value(value, field_name=""):
     """加密字符串
 
-    cryptography 不可用时降级为明文存储（返回原值），并记录一次警告。
+    cryptography 不可用时：敏感字段（字段名含 key/token/secret/password）抛出 RuntimeError，
+    非敏感字段降级为明文存储（返回原值），并记录一次警告。
     """
     if not value:
         return ""
     if Fernet is None:
-        logger.warning("cryptography 不可用，敏感字段将以明文形式保存")
+        名称小写 = field_name.lower()
+        if any(kw in 名称小写 for kw in ("key", "token", "secret", "password")):
+            raise RuntimeError("加密模块不可用，无法安全存储敏感信息")
+        logger.warning("cryptography 不可用，非敏感字段将以明文形式保存")
         return value
     try:
         cipher = _get_cipher()
@@ -365,7 +377,10 @@ def save_settings(settings):
     settings_to_save = dict(settings)
     for key in _SENSITIVE_KEYS:
         if key in settings_to_save and settings_to_save[key]:
-            settings_to_save[key] = _encrypt_value(settings_to_save[key])
+            try:
+                settings_to_save[key] = _encrypt_value(settings_to_save[key], key)
+            except RuntimeError:
+                raise ValueError("保存失败：加密模块不可用，无法安全存储敏感信息（如 API Key、Token），请安装 cryptography 库后重试")
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(settings_to_save, f, ensure_ascii=False, indent=2)
 
@@ -434,8 +449,10 @@ def scan_plugin_file_tree(plugin_path):
             return items
         
         for entry in entries:
-            # 跳过隐藏文件和忽略目录
+            # 跳过隐藏文件、忽略目录和备份文件
             if entry.name.startswith('.') or entry.name in _IGNORED_DIRS:
+                continue
+            if entry.name.endswith('.bak'):
                 continue
             
             rel_path = str(entry.relative_to(plugin_path)).replace('\\', '/')
@@ -510,7 +527,7 @@ def read_plugin_file(plugin_path, relative_file_path):
 
 
 def write_plugin_file(plugin_path, relative_file_path, content):
-    """写入/修改插件内指定文件（自动备份）
+    """写入/修改插件内指定文件（直接覆盖，不创建备份文件）
     
     参数:
         plugin_path: 插件根目录的完整路径
@@ -529,14 +546,253 @@ def write_plugin_file(plugin_path, relative_file_path, content):
         return False, "安全错误：文件路径超出插件目录范围"
     
     try:
-        # 备份已有文件
-        _备份文件(file_path)
-        
         # 确保父目录存在
         file_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # 写入内容
+        # 直接覆盖写入，不创建 .bak 备份（避免备份文件污染插件目录）
         file_path.write_text(content, encoding='utf-8')
+
+        # 自动清理当前文件的 .bak 残留
+        try:
+            bak_path = Path(str(file_path) + '.bak')
+            if bak_path.exists():
+                bak_path.unlink()
+        except Exception:
+            pass  # 清理失败不影响主流程
+
         return True, f"成功写入: {relative_file_path}"
     except Exception as e:
         return False, f"写入失败: {str(e)}"
+
+
+# ─── 增量补丁（Unified Diff）应用 ─────────────────────────
+
+def _parse_unified_diff(patch_content: str) -> list:
+    """解析 unified diff 格式的补丁内容，返回 hunk 列表
+
+    Returns:
+        list[dict]: 每个 dict 含:
+            - old_start: 原文件起始行号 (1-indexed)
+            - old_count: 原文件涉及行数
+            - new_start: 新文件起始行号 (1-indexed)
+            - new_count: 新文件涉及行数
+            - lines: list of (type, content) where type is ' ', '+', '-'
+    """
+    hunks = []
+    lines = patch_content.splitlines()
+    i = 0
+
+    # 跳过 --- 和 +++ 头行及空行，定位到第一个 @@
+    while i < len(lines):
+        if lines[i].startswith('@@'):
+            break
+        i += 1
+
+    while i < len(lines):
+        line = lines[i]
+
+        # 解析 @@ hunk header
+        match = re.match(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+        if not match:
+            i += 1
+            continue
+
+        old_start = int(match.group(1))
+        old_count = int(match.group(2)) if match.group(2) is not None else 1
+        new_start = int(match.group(3))
+        new_count = int(match.group(4)) if match.group(4) is not None else 1
+
+        hunk_lines = []
+        i += 1
+
+        # 读取 hunk 内容行
+        while i < len(lines):
+            hunk_line = lines[i]
+            # 遇到下一个 hunk 头或文件头，结束当前 hunk
+            if hunk_line.startswith('@@'):
+                break
+            if hunk_line.startswith('--- ') or hunk_line.startswith('+++ '):
+                break
+
+            if hunk_line.startswith('+'):
+                hunk_lines.append(('+', hunk_line[1:]))
+            elif hunk_line.startswith('-'):
+                hunk_lines.append(('-', hunk_line[1:]))
+            elif hunk_line.startswith(' '):
+                hunk_lines.append((' ', hunk_line[1:]))
+            elif hunk_line.rstrip() == '':
+                # 空行或仅含空白：视为上下文行（某些 diff 工具会省略前导空格）
+                hunk_lines.append((' ', hunk_line))
+            elif hunk_line.startswith('\\'):
+                # \ No newline at end of file 等元信息行，跳过
+                pass
+            else:
+                # 未知行类型，按上下文行处理（容错）
+                hunk_lines.append((' ', hunk_line))
+            i += 1
+
+        hunks.append({
+            'old_start': old_start,
+            'old_count': old_count,
+            'new_start': new_start,
+            'new_count': new_count,
+            'lines': hunk_lines,
+        })
+
+    return hunks
+
+
+def _normalize_line(s: str) -> str:
+    """归一化行内容用于比较：去除行尾换行符和尾部空白"""
+    return s.rstrip('\r\n').rstrip()
+
+
+def _find_match_position(lines: list, old_lines: list, expected_start: int) -> int:
+    """在 lines 中查找 old_lines 的匹配位置
+
+    查找策略（逐级放宽）：
+      1. 在 expected_start 处精确匹配
+      2. 在 expected_start 附近搜索（±50行）
+      3. 全局搜索
+
+    Returns:
+        匹配起始索引（0-indexed），未找到返回 -1
+    """
+    if not old_lines:
+        # 纯插入：直接在 expected_start 处插入
+        return max(0, min(expected_start, len(lines)))
+
+    old_normalized = [_normalize_line(l) for l in old_lines]
+    old_len = len(old_normalized)
+
+    def check_at(pos: int) -> bool:
+        if pos < 0 or pos + old_len > len(lines):
+            return False
+        for j, old_line in enumerate(old_normalized):
+            if _normalize_line(lines[pos + j]) != old_line:
+                return False
+        return True
+
+    # 1. 在期望位置精确匹配
+    if check_at(expected_start):
+        return expected_start
+
+    # 2. 在附近搜索（±50行）
+    search_range = 50
+    for offset in range(1, search_range + 1):
+        if check_at(expected_start - offset):
+            return expected_start - offset
+        if check_at(expected_start + offset):
+            return expected_start + offset
+
+    # 3. 全局搜索（最后手段）
+    for k in range(len(lines) - old_len + 1):
+        if check_at(k):
+            return k
+
+    return -1
+
+
+def apply_patch(file_path: Path, patch_content: str) -> str:
+    """应用 unified diff 补丁到文件
+
+    解析标准 unified diff 格式（--- /+++ /@@）的补丁，应用到现有文件内容上。
+    补丁应用前自动备份原文件（创建 .bak）。
+
+    Args:
+        file_path: 目标文件路径
+        patch_content: unified diff 格式的补丁内容
+
+    Returns:
+        应用补丁后的完整文件内容
+
+    Raises:
+        FileNotFoundError: 目标文件不存在
+        ValueError: 补丁格式无效或上下文不匹配
+    """
+    file_path = Path(file_path)
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"目标文件不存在: {file_path}")
+
+    # 读取原文件
+    original = file_path.read_text(encoding='utf-8')
+
+    # 记录原始换行符类型
+    original_ends_with_newline = original.endswith('\n')
+    original_ends_with_crlf = original.endswith('\r\n')
+
+    # 按行分割（不保留换行符，后续统一拼接）
+    original_lines = original.splitlines()
+
+    # 解析补丁
+    hunks = _parse_unified_diff(patch_content)
+
+    if not hunks:
+        raise ValueError("补丁内容无效：未找到任何 @@ hunk 头。请确保补丁使用标准 unified diff 格式（以 @@ -start,count +start,count @@ 开头）。")
+
+    # 应用补丁
+    result_lines = list(original_lines)
+    line_offset = 0  # 累计行偏移量（前一个 hunk 修改导致的行数变化）
+    applied_hunks = 0
+
+    for hunk_idx, hunk in enumerate(hunks):
+        # 提取 old lines（context + removed）和 new lines（context + added）
+        old_lines = [content for typ, content in hunk['lines'] if typ in (' ', '-')]
+        new_lines = [content for typ, content in hunk['lines'] if typ in (' ', '+')]
+
+        # 计算在 result_lines 中的搜索起始位置
+        expected_start = hunk['old_start'] - 1 + line_offset  # 转为 0-indexed
+        expected_start = max(0, min(expected_start, len(result_lines)))
+
+        # 在原文件中查找匹配位置
+        match_pos = _find_match_position(result_lines, old_lines, expected_start)
+
+        if match_pos < 0:
+            # 构建详细的错误信息
+            old_preview = '\n'.join(old_lines[:5])
+            if len(old_lines) > 5:
+                old_preview += '\n...(更多行已省略)'
+            raise ValueError(
+                f"补丁第 {hunk_idx + 1} 个 hunk 上下文不匹配"
+                f"（期望从原文件第 {hunk['old_start']} 行开始）。\n"
+                f"期望的上下文/删除行内容（前5行）:\n{old_preview}\n"
+                f"请确认补丁基于文件最新内容生成，且上下文行准确无误。"
+            )
+
+        # 替换匹配的行
+        if old_lines:
+            result_lines[match_pos:match_pos + len(old_lines)] = new_lines
+        else:
+            # 纯插入：在 match_pos 处插入新行
+            result_lines[match_pos:match_pos] = new_lines
+
+        # 更新行偏移
+        line_offset += len(new_lines) - len(old_lines)
+        applied_hunks += 1
+
+    # 重建文件内容
+    result = '\n'.join(result_lines)
+
+    # 保持原始换行符结尾行为
+    if original_ends_with_newline and not result.endswith('\n'):
+        result += '\n'
+    elif not original_ends_with_newline and result.endswith('\n'):
+        result = result.rstrip('\n')
+
+    # 补丁应用前备份原文件
+    _备份文件(file_path)
+
+    # 写入结果
+    file_path.write_text(result, encoding='utf-8')
+
+    # 写入成功后清理 .bak 残留（与 write_plugin_file 保持一致）
+    try:
+        bak_path = Path(str(file_path) + '.bak')
+        if bak_path.exists():
+            bak_path.unlink()
+    except OSError:
+        pass
+
+    logger.info("补丁应用成功: %s, 共 %d 个 hunk", file_path.name, applied_hunks)
+    return result

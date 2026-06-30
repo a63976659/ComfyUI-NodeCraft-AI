@@ -412,26 +412,6 @@ async def _get_all_file_shas(session: aiohttp.ClientSession, headers: dict,
         logger.exception(f"获取文件树异常: {e}，将逐文件查询 SHA")
         return {}
 
-
-async def _get_file_sha(session: aiohttp.ClientSession, headers: dict,
-                        username: str, repo_name: str, file_path: str) -> str | None:
-    """获取文件当前 SHA（若文件已存在）- 备用方法
-
-    返回: SHA 字符串或 None
-    """
-    try:
-        async with session.get(
-            f"{_GITHUB_API_BASE}/repos/{username}/{repo_name}/contents/{file_path}",
-            headers=headers
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get("sha")
-            return None
-    except Exception:
-        return None
-
-
 async def _upload_file(session: aiohttp.ClientSession, headers: dict,
                        username: str, repo_name: str,
                        file_path: str, content_b64: str,
@@ -647,7 +627,7 @@ async def sync_to_github(plugin_dir: str, repo_name: str,
 
                 try:
                     # 读取文件内容并 base64 编码
-                    content_bytes = abs_path.read_bytes()
+                    content_bytes = await asyncio.to_thread(abs_path.read_bytes)
                     content_b64 = base64.b64encode(content_bytes).decode("utf-8")
                 except OSError as e:
                     logger.warning(f"⚠️ 文件读取失败 ({rel_path}): {e}")

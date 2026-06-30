@@ -1,7 +1,9 @@
 """
 API 文档模块 - OpenAPI 3.0 规范 + Swagger UI
 """
+import copy
 from aiohttp import web
+from .系统环境映射 import 项目版本
 
 
 # ─── Swagger UI HTML 页面 ─────────────────────────────────────
@@ -15,6 +17,7 @@ SWAGGER_HTML = """<!DOCTYPE html>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 </head>
 <body>
+    <div id="missing-endpoints-notice" style="padding: 10px 20px; background: #fff3cd; border-bottom: 1px solid #ffeaa7; display: none; font-size: 14px; color: #856404;"></div>
     <div id="swagger-ui"></div>
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script>
@@ -25,6 +28,7 @@ SWAGGER_HTML = """<!DOCTYPE html>
             presets: [SwaggerUIBundle.presets.apis],
         });
     </script>
+    <!--MISSING_NOTICE-->
 </body>
 </html>"""
 
@@ -36,7 +40,7 @@ OPENAPI_SPEC = {
     "info": {
         "title": "NodeCraft AI API",
         "description": "节点梦工厂 - ComfyUI AI 编程助手 API",
-        "version": "0.3.0",
+        "version": 项目版本,
         "contact": {"name": "NodeCraft AI Team"}
     },
     "servers": [{"url": "/ai-coder", "description": "主 API 服务"}],
@@ -576,13 +580,133 @@ OPENAPI_SPEC = {
 }
 
 
+# ─── 路由元数据自动提取 ───────────────────────────────────
+
+def _extract_routes_metadata(app) -> dict:
+    """从 aiohttp app 路由表自动提取路由元数据。
+
+    遍历 app.router.routes()，提取每个路由的 method、path、handler 名称和 docstring。
+    仅提取 /ai-coder/* 前缀的路由，跳过 /v1/ai-coder/* 别名和文档端点自身。
+
+    Returns:
+        dict: {path: {method: {"summary": str, "description": str}}}
+        其中 path 已剥离 /ai-coder 前缀，与 OPENAPI_SPEC 的 paths 格式一致。
+    """
+    result = {}
+    skip_prefixes = ('/ai-coder/docs', '/ai-coder/openapi.json')
+
+    for route in app.router.routes():
+        try:
+            method = route.method
+            # aiohttp 中 '*' 表示所有方法，跳过
+            if method == '*':
+                continue
+            method = method.lower()
+
+            resource = route.resource
+            if resource is None:
+                continue
+            path = resource.canonical
+
+            # 仅保留 /ai-coder/* 路由
+            if not path.startswith('/ai-coder/'):
+                continue
+            # 跳过 /v1/ 前缀别名
+            if path.startswith('/v1/'):
+                continue
+            # 跳过文档端点自身
+            if any(path.startswith(skip) for skip in skip_prefixes):
+                continue
+
+            # 剥离 /ai-coder 前缀，与 OPENAPI_SPEC 的 paths 格式对齐
+            relative_path = path[len('/ai-coder'):]
+
+            handler = route.handler
+            handler_name = getattr(handler, '__name__', str(handler))
+            docstring = (getattr(handler, '__doc__', '') or '').strip()
+
+            if relative_path not in result:
+                result[relative_path] = {}
+
+            if method not in result[relative_path]:
+                result[relative_path][method] = {
+                    "summary": handler_name,
+                    "description": docstring or f"Handler: {handler_name}",
+                }
+        except Exception:
+            continue
+
+    return result
+
+
+def _find_missing_endpoints(manual_paths: set, extracted_routes: dict) -> list:
+    """找出手动 spec 中缺失但实际存在的端点。
+
+    Args:
+        manual_paths: 手动 spec 中的路径集合（如 {"/sessions", "/chat", ...}）
+        extracted_routes: _extract_routes_metadata 返回的路由字典
+
+    Returns:
+        list: 缺失端点的列表，每项为 {"path": str, "methods": [str, ...]}
+    """
+    missing = []
+    for path, methods in extracted_routes.items():
+        if path not in manual_paths:
+            missing.append({
+                "path": path,
+                "methods": list(methods.keys()),
+            })
+    return missing
+
+
 # ─── 路由处理函数 ─────────────────────────────────────────────
 
 async def docs_page(request):
     """Swagger UI 文档页面"""
-    return web.Response(text=SWAGGER_HTML, content_type='text/html')
+    extracted = _extract_routes_metadata(request.app)
+    manual_paths = set(OPENAPI_SPEC.get("paths", {}).keys())
+    missing = _find_missing_endpoints(manual_paths, extracted)
+    missing_count = len(missing)
+
+    html = SWAGGER_HTML
+    if missing_count > 0:
+        notice_text = f"⚠️ 自动检测到 {missing_count} 个未文档化的端点（详见 OpenAPI JSON 中的 paths）"
+        notice_script = f"""
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {{
+            var notice = document.getElementById('missing-endpoints-notice');
+            notice.textContent = '{notice_text}';
+            notice.style.display = 'block';
+        }});
+    </script>"""
+        html = html.replace('<!--MISSING_NOTICE-->', notice_script)
+    return web.Response(text=html, content_type='text/html')
 
 
 async def openapi_json(request):
     """OpenAPI JSON 规范"""
-    return web.json_response(OPENAPI_SPEC)
+    spec = copy.deepcopy(OPENAPI_SPEC)
+
+    # 自动提取路由并合并缺失端点
+    extracted = _extract_routes_metadata(request.app)
+    manual_paths = set(spec.get("paths", {}).keys())
+    missing = _find_missing_endpoints(manual_paths, extracted)
+
+    # 将缺失的端点补充到 spec 中（手动 spec 优先，不覆盖已有描述）
+    for item in missing:
+        path = item["path"]
+        path_item = {}
+        for method in item["methods"]:
+            meta = extracted[path][method]
+            path_item[method] = {
+                "tags": ["自动检测"],
+                "summary": meta["summary"],
+                "description": meta["description"],
+                "security": [{"BearerAuth": []}],
+                "responses": {
+                    "200": {"description": "成功"}
+                },
+            }
+        spec["paths"][path] = path_item
+
+    return web.json_response(spec)

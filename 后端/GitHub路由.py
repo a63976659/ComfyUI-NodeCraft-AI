@@ -11,7 +11,7 @@ import asyncio
 
 from aiohttp import web
 
-from .路由公共 import _check_auth, _error_response, _rate_limiter
+from .路由公共 import _error_response, _rate_limiter
 from .文件读写操作 import load_settings
 from .系统环境映射 import get_custom_nodes_path
 from .GitHub同步 import (
@@ -25,10 +25,6 @@ async def github_sync(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_path = data.get("plugin_path", "")
@@ -83,10 +79,6 @@ async def github_check_repo(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         data = await request.json()
         repo_name = data.get("repo_name", "")
 
@@ -113,10 +105,6 @@ async def github_test_connection(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         # P1-1：同步 I/O 放入线程池
         settings = await asyncio.to_thread(load_settings)

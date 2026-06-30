@@ -10,6 +10,9 @@
 - POST /ai-coder/plugin-files               获取插件文件树
 - POST /ai-coder/read-file                  读取文件
 - POST /ai-coder/write-file                 写入文件
+- POST /ai-coder/edit-file                  增量编辑文件（unified diff 补丁，前端编辑器专用）
+- POST /ai-coder/apply-patch                应用 unified diff 补丁（增量编辑）
+- POST /ai-coder/code-review               AI 代码审查（扫描源码→LLM→结构化报告）
 """
 import asyncio
 from pathlib import Path
@@ -17,17 +20,19 @@ from pathlib import Path
 from aiohttp import web
 
 from .路由公共 import (
-    _check_auth, _error_response, _rate_limiter, llm_client, local_model_client,
-    _分页参数, _分页响应, _检查上传大小,
+    _error_response, _rate_limiter, llm_client, local_model_client,
+    tool_router, _分页参数, _分页响应, _检查上传大小, 服务器内部错误,
 )
-from .文件读写操作 import create_plugin_scaffold
-from .系统环境映射 import get_custom_nodes_path
+from .文件读写操作 import create_plugin_scaffold, load_settings
+from .系统环境映射 import get_custom_nodes_path, get_default_llm_path
 from .日志配置 import 获取日志器
 
 logger = 获取日志器("文件路由")
 
-# M5: 错误消息脱敏 - 通用服务器错误文案
-_服务器内部错误 = "服务器内部错误，请稍后重试"
+# Windows 保留字集合（用于插件名/文件夹名校验）
+_reserved_names = {"con", "prn", "aux", "nul",
+                   "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+                   "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"}
 
 
 # ─── 文件操作 ─────────────────────────────────────────────
@@ -39,10 +44,6 @@ async def handle_create_folder(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         data = await request.json()
         plugin_name = data.get("plugin_name", "").strip()
 
@@ -51,9 +52,6 @@ async def handle_create_folder(request):
             return _error_response("插件名称长度不能超过128个字符")
 
         # C4: Windows 保留字检查
-        _reserved_names = {"con", "prn", "aux", "nul",
-                           "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-                           "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"}
         if plugin_name.lower().split(".")[0] in _reserved_names:
             return _error_response(f"插件名称不能使用Windows保留字: {plugin_name}")
 
@@ -65,7 +63,7 @@ async def handle_create_folder(request):
         return web.json_response({"success": success, "message": message, "path": path})
     except Exception as e:
         logger.error(f"创建插件脚手架异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 # ─── 插件目录管理 ────────────────────────────────────────
@@ -73,9 +71,6 @@ async def handle_create_folder(request):
 async def handle_get_local_plugins(request):
     """扫描 custom_nodes 目录，返回所有插件目录名列表（支持分页：?page=1&page_size=20，最大 page_size=100）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         nodes_path = get_custom_nodes_path()
         plugins = []
         if nodes_path.exists():
@@ -87,7 +82,7 @@ async def handle_get_local_plugins(request):
         return web.json_response(payload)
     except Exception as e:
         logger.error(f"扫描本地插件列表异常: {e}", exc_info=True)
-        return web.json_response({"plugins": [], "error": _服务器内部错误}, status=500)
+        return web.json_response({"plugins": [], "error": 服务器内部错误}, status=500)
 
 
 async def handle_browse_folder(request):
@@ -96,10 +91,6 @@ async def handle_browse_folder(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         initial_dir = data.get("initial_dir", "")
@@ -138,7 +129,7 @@ async def handle_browse_folder(request):
         })
     except Exception as e:
         logger.error(f"浏览子目录异常: {e}", exc_info=True)
-        return web.json_response({"status": "error", "error": _服务器内部错误}, status=500)
+        return web.json_response({"status": "error", "error": 服务器内部错误}, status=500)
 
 
 # ─── 插件依赖分析 ─────────────────────────────────────
@@ -149,10 +140,6 @@ async def handle_analyze_plugin(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_name = data.get("plugin_path", "")
@@ -176,7 +163,7 @@ async def handle_analyze_plugin(request):
         return web.json_response({"status": "success", "data": result})
     except Exception as e:
         logger.error(f"插件依赖分析异常: {e}", exc_info=True)
-        return web.json_response({"status": "error", "error": _服务器内部错误}, status=500)
+        return web.json_response({"status": "error", "error": 服务器内部错误}, status=500)
 
 
 # ─── 可视化持久化与 AI 分析 ───────────────────
@@ -196,10 +183,6 @@ async def handle_visualization_load(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         plugin_name = request.query.get("plugin_path", "").strip()
         if not plugin_name:
             return web.json_response({"status": "error", "error": "缺少 plugin_path 参数"}, status=400)
@@ -214,7 +197,7 @@ async def handle_visualization_load(request):
         return web.json_response({"status": "success", "data": data})
     except Exception as e:
         logger.error(f"读取可视化持久化数据异常: {e}", exc_info=True)
-        return web.json_response({"status": "error", "error": _服务器内部错误}, status=500)
+        return web.json_response({"status": "error", "error": 服务器内部错误}, status=500)
 
 
 async def handle_visualization_analyze(request):
@@ -223,10 +206,6 @@ async def handle_visualization_analyze(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_name = (data.get("plugin_path") or "").strip()
@@ -272,7 +251,7 @@ async def handle_visualization_analyze(request):
         })
     except Exception as e:
         logger.error(f"执行可视化分析异常: {e}", exc_info=True)
-        return web.json_response({"status": "error", "error": _服务器内部错误}, status=500)
+        return web.json_response({"status": "error", "error": 服务器内部错误}, status=500)
 
 
 # ─── 插件文件操作 API ────────────────────────────────────
@@ -283,10 +262,6 @@ async def handle_get_plugin_files(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_name = data.get("plugin_path", "")
@@ -308,7 +283,7 @@ async def handle_get_plugin_files(request):
         return web.json_response({"success": True, "tree": tree, "plugin_path": str(plugin_path)})
     except Exception as e:
         logger.error(f"获取插件文件树异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def handle_read_plugin_file(request):
@@ -317,10 +292,6 @@ async def handle_read_plugin_file(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_name = data.get("plugin_path", "")
@@ -346,7 +317,7 @@ async def handle_read_plugin_file(request):
             return web.json_response({"success": False, "error": result}, status=400)
     except Exception as e:
         logger.error(f"读取插件文件异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 async def handle_write_plugin_file(request):
@@ -360,10 +331,6 @@ async def handle_write_plugin_file(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         plugin_name = data.get("plugin_path", "")
@@ -390,7 +357,347 @@ async def handle_write_plugin_file(request):
             return web.json_response({"success": False, "error": message}, status=400)
     except Exception as e:
         logger.error(f"写入插件文件异常: {e}", exc_info=True)
-        return web.json_response({"success": False, "error": _服务器内部错误}, status=500)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
+
+
+async def handle_apply_patch(request):
+    """应用 unified diff 补丁到插件内的文件（增量编辑）"""
+    try:
+        # H4: 在读取请求体前预校验上传大小
+        大小检查 = await _检查上传大小(request)
+        if 大小检查:
+            return 大小检查
+
+        client_ip = request.remote or "unknown"
+        if not _rate_limiter.is_allowed(client_ip):
+            return _error_response("请求过于频繁，请稍后重试", 429)
+
+        data = await request.json()
+        plugin_name = data.get("plugin_path", "")
+        file_path = data.get("file_path", "")
+        patch_content = data.get("patch_content", "")
+
+        if not plugin_name or not file_path:
+            return web.json_response({"success": False, "error": "缺少 plugin_path 或 file_path 参数"}, status=400)
+
+        if not patch_content.strip():
+            return web.json_response({"success": False, "error": "patch_content 不能为空"}, status=400)
+
+        # 解析插件路径
+        plugin_path = Path(plugin_name)
+        if not plugin_path.is_absolute():
+            plugin_path = get_custom_nodes_path() / plugin_name
+
+        # 安全校验：确保文件路径在插件目录内
+        target_file = (plugin_path / file_path).resolve()
+        try:
+            target_file.relative_to(plugin_path.resolve())
+        except ValueError:
+            return web.json_response({"success": False, "error": "安全错误：文件路径超出插件目录范围"}, status=400)
+
+        if not target_file.exists():
+            return web.json_response({"success": False, "error": f"文件不存在: {file_path}"}, status=404)
+
+        from .文件读写操作 import apply_patch
+        # P1-1：同步补丁应用（含文件 I/O）放入线程池
+        try:
+            content = await asyncio.to_thread(apply_patch, target_file, patch_content)
+            return web.json_response({"success": True, "content": content})
+        except (ValueError, FileNotFoundError) as e:
+            return web.json_response({"success": False, "error": f"补丁应用失败: {str(e)}"}, status=400)
+    except Exception as e:
+        logger.error(f"应用补丁异常: {e}", exc_info=True)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
+
+
+async def handle_edit_file(request):
+    """增量编辑文件（unified diff 补丁，前端编辑器专用）"""
+    try:
+        # H4: 在读取请求体前预校验上传大小
+        大小检查 = await _检查上传大小(request)
+        if 大小检查:
+            return 大小检查
+
+        client_ip = request.remote or "unknown"
+        if not _rate_limiter.is_allowed(client_ip):
+            return _error_response("请求过于频繁，请稍后重试", 429)
+
+        data = await request.json()
+        plugin_name = data.get("plugin_path", "")
+        file_path = data.get("file_path", "")
+        patch = data.get("patch", "")
+
+        if not file_path or not patch.strip():
+            return _error_response("缺少 file_path 或 patch 参数", 400)
+
+        # 解析插件路径
+        plugin_path = Path(plugin_name)
+        if not plugin_path.is_absolute():
+            plugin_path = get_custom_nodes_path() / plugin_name
+
+        # 安全校验：确保文件路径在插件目录内
+        target_file = (plugin_path / file_path).resolve()
+        try:
+            target_file.relative_to(plugin_path.resolve())
+        except ValueError:
+            return web.json_response({"success": False, "error": "安全错误：文件路径超出插件目录范围"}, status=400)
+
+        if not target_file.exists():
+            return web.json_response({"success": False, "error": f"文件不存在: {file_path}"}, status=404)
+
+        from .文件读写操作 import apply_patch
+        # P1-1：同步补丁应用（含文件 I/O）放入线程池
+        try:
+            content = await asyncio.to_thread(apply_patch, target_file, patch)
+            return web.json_response({
+                "success": True,
+                "message": f"增量修改成功: {file_path}",
+                "details": content
+            }, status=200)
+        except (ValueError, FileNotFoundError) as e:
+            return web.json_response({"success": False, "error": f"补丁应用失败: {str(e)}"}, status=400)
+    except Exception as e:
+        logger.error(f"增量编辑文件异常: {e}", exc_info=True)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
+
+
+# ─── AI 代码审查 ─────────────────────────────────────────────
+
+def _筛选审查文件(all_files: list, review_depth: str) -> list:
+    """根据审查深度筛选需要审查的文件列表"""
+    if review_depth == "quick":
+        # 快速模式：__init__.py 和根目录 .py 文件
+        result = []
+        for f in all_files:
+            if f.endswith("__init__.py"):
+                result.append(f)
+            elif f.endswith(".py") and "/" not in f:
+                result.append(f)
+        return result
+    elif review_depth == "deep":
+        # 深度模式：所有 .py 和 .js 文件
+        return [f for f in all_files if f.endswith(".py") or f.endswith(".js")]
+    else:
+        # 标准模式：所有 .py 文件
+        return [f for f in all_files if f.endswith(".py")]
+
+
+def _构建审查提示词(file_summaries: list, review_knowledge: str, review_depth: str):
+    """构建代码审查专用提示词，返回 (system_prompt, user_message)"""
+    depth_desc = {
+        "quick": "快速审查（仅核心文件）",
+        "standard": "标准审查（所有 Python 文件）",
+        "deep": "深度审查（所有 Python 和 JavaScript 文件）",
+    }.get(review_depth, "标准审查")
+
+    system_prompt = (
+        "你是一位 ComfyUI 插件代码审查专家。请对以下插件代码进行"
+        + depth_desc
+        + "。\n\n"
+        "## 审查标准\n"
+        + (review_knowledge or "参考通用代码质量审查清单")
+        + "\n\n"
+        "## 审查维度\n"
+        "1. 安全性（security）：输入验证、路径遍历防护、代码注入防护、敏感信息处理\n"
+        "2. 性能（performance）：异步 I/O、内存管理、GPU 利用率\n"
+        "3. 代码规范（style）：命名规范、类型提示、文档字符串\n"
+        "4. ComfyUI 节点规范（comfyui）：INPUT_TYPES/RETURN_TYPES/Function 对齐、节点注册、IS_CHANGED 实现\n"
+        "5. 可维护性（maintenance）：模块化、错误处理、日志使用、配置管理\n\n"
+        "## 输出格式\n"
+        "请严格输出以下 JSON 格式的审查报告（不要包含其他文本）：\n\n"
+        "```json\n"
+        "{\n"
+        '    "summary": "总体评价（2-3句话概括代码质量）",\n'
+        '    "score": 85,\n'
+        '    "issues": [\n'
+        '        {\n'
+        '            "severity": "high",\n'
+        '            "category": "security",\n'
+        '            "file": "node.py",\n'
+        '            "line": 42,\n'
+        '            "description": "问题描述",\n'
+        '            "suggestion": "改进建议"\n'
+        '        }\n'
+        '    ],\n'
+        '    "strengths": ["代码优点1", "代码优点2"]\n'
+        "}\n"
+        "```\n\n"
+        "注意：\n"
+        "- score 范围 0-100，90+优秀，70-89良好，60-69及格，60以下不合格\n"
+        "- issues 按 severity 排序（high > medium > low）\n"
+        "- 如果没有发现问题，issues 为空数组\n"
+        "- strengths 至少列出 1 个优点\n"
+        "- line 字段尽量给出大致行号，无法确定时填 0\n"
+    )
+
+    code_parts = []
+    for f in file_summaries:
+        ext = "javascript" if f["path"].endswith(".js") else "python"
+        code_parts.append(
+            f"### 文件: {f['path']} ({f['size']} 字符)\n```{ext}\n{f['content']}\n```"
+        )
+
+    user_message = (
+        f"## 待审查插件代码\n\n"
+        f"共 {len(file_summaries)} 个文件：\n\n"
+        + "\n\n".join(code_parts)
+        + "\n\n请按照审查标准对以上代码进行全面审查，输出 JSON 格式的审查报告。"
+    )
+    return system_prompt, user_message
+
+
+def _解析审查结果(reply: str) -> dict:
+    """解析 LLM 返回的审查结果，提取 JSON"""
+    import json as _json
+    import re as _re
+
+    if not reply:
+        return {"summary": "审查结果为空", "score": 0, "issues": [], "strengths": []}
+
+    # 1. 尝试直接 JSON 解析
+    try:
+        return _json.loads(reply)
+    except _json.JSONDecodeError:
+        pass
+
+    # 2. 尝试从代码块中提取 JSON
+    json_match = _re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', reply)
+    if json_match:
+        try:
+            return _json.loads(json_match.group(1))
+        except _json.JSONDecodeError:
+            pass
+
+    # 3. 尝试从文本中提取最外层 JSON 对象
+    brace_start = reply.find("{")
+    brace_end = reply.rfind("}")
+    if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+        try:
+            return _json.loads(reply[brace_start:brace_end + 1])
+        except _json.JSONDecodeError:
+            pass
+
+    # 4. 降级：返回原始文本作为摘要
+    return {
+        "summary": reply[:500],
+        "score": 0,
+        "issues": [],
+        "strengths": [],
+        "raw_response": reply,
+    }
+
+
+async def handle_code_review(request):
+    """AI 代码审查：扫描插件源码 → 构建审查提示词 → 调用 LLM → 返回结构化审查报告"""
+    try:
+        client_ip = request.remote or "unknown"
+        if not _rate_limiter.is_allowed(client_ip):
+            return _error_response("请求过于频繁，请稍后重试", 429)
+
+        data = await request.json()
+        plugin_name = (data.get("plugin_path") or "").strip()
+        review_depth = (data.get("review_depth") or "standard").strip()
+
+        if not plugin_name:
+            return web.json_response({"success": False, "error": "缺少 plugin_path 参数"}, status=400)
+
+        if review_depth not in ("quick", "standard", "deep"):
+            review_depth = "standard"
+
+        plugin_path = _resolve_plugin_path(plugin_name)
+        if not plugin_path.exists():
+            return web.json_response({"success": False, "error": f"插件路径不存在: {plugin_path}"}, status=404)
+
+        # 1. 扫描文件列表
+        from .插件分析器 import scan_directory
+        all_files = await asyncio.to_thread(scan_directory, plugin_path)
+
+        review_files = _筛选审查文件(all_files, review_depth)
+        if not review_files:
+            return web.json_response({
+                "success": False,
+                "error": f"未找到可审查的文件（深度: {review_depth}）",
+            }, status=400)
+
+        # 2. 读取源码
+        max_chars = 6000 if review_depth == "deep" else 10000
+        file_summaries = []
+        for rel_path in review_files:
+            full_path = plugin_path / rel_path
+            try:
+                content = await asyncio.to_thread(
+                    full_path.read_text, encoding="utf-8", errors="ignore"
+                )
+                if len(content) > max_chars:
+                    content = content[:max_chars] + f"\n...[文件已截断，原始长度 {len(content)} 字符]"
+                file_summaries.append({
+                    "path": rel_path,
+                    "content": content,
+                    "size": len(content),
+                })
+            except Exception as e:
+                logger.warning(f"读取审查文件 {rel_path} 失败: {e}")
+
+        if not file_summaries:
+            return web.json_response({"success": False, "error": "所有文件读取失败"}, status=500)
+
+        # 3. RAG 检索审查清单知识库
+        review_knowledge = ""
+        if tool_router is not None:
+            review_knowledge = tool_router.retrieve_knowledge(
+                "代码质量审查 安全性 性能 代码规范 ComfyUI节点规范 可维护性 输入验证 路径遍历",
+                active_tab="optimize",
+            )
+
+        # 4. 构建审查提示词
+        system_prompt, user_message = _构建审查提示词(file_summaries, review_knowledge, review_depth)
+
+        # 5. 加载设置并调用 LLM
+        settings = await asyncio.to_thread(load_settings)
+        model_source = settings.get("model_source", "api")
+        messages = [{"role": "user", "content": user_message}]
+
+        if model_source == "local" and local_model_client is not None:
+            local_model_name = settings.get("local_model_name", "")
+            local_path = settings.get("local_path", "")
+            if not local_path and local_model_name:
+                local_path = str(get_default_llm_path() / local_model_name)
+            if not local_path:
+                llm_dir = get_default_llm_path()
+                if llm_dir.exists():
+                    for item in llm_dir.iterdir():
+                        if item.is_dir() and (item / "config.json").exists():
+                            local_path = str(item)
+                            break
+            if not local_path:
+                return web.json_response({
+                    "success": False,
+                    "error": "未检测到可用的本地模型，请在设置中配置模型路径",
+                }, status=400)
+            try:
+                if local_model_client.当前模型名 != Path(local_path).name:
+                    await local_model_client.异步加载模型(local_path)
+            except Exception as e:
+                return web.json_response({
+                    "success": False,
+                    "error": f"模型加载失败: {str(e)}",
+                }, status=500)
+            reply = await local_model_client.generate_response(system_prompt, messages)
+        else:
+            reply = await llm_client.generate_response(system_prompt, messages)
+
+        # 6. 解析审查结果
+        review_result = _解析审查结果(reply)
+
+        # 附加审查元信息
+        review_result["review_depth"] = review_depth
+        review_result["files_reviewed"] = len(file_summaries)
+        review_result["file_list"] = [f["path"] for f in file_summaries]
+
+        return web.json_response({"success": True, "review": review_result})
+    except Exception as e:
+        logger.error(f"代码审查异常: {e}", exc_info=True)
+        return web.json_response({"success": False, "error": 服务器内部错误}, status=500)
 
 
 def register_文件路由(routes):
@@ -404,3 +711,6 @@ def register_文件路由(routes):
     routes.post("/ai-coder/plugin-files")(handle_get_plugin_files)
     routes.post("/ai-coder/read-file")(handle_read_plugin_file)
     routes.post("/ai-coder/write-file")(handle_write_plugin_file)
+    routes.post("/ai-coder/apply-patch")(handle_apply_patch)
+    routes.post("/ai-coder/edit-file")(handle_edit_file)
+    routes.post("/ai-coder/code-review")(handle_code_review)

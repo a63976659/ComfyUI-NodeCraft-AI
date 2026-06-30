@@ -7,7 +7,6 @@
 """
 import asyncio
 import json
-import logging
 import time
 import weakref
 from datetime import datetime
@@ -17,13 +16,14 @@ import aiohttp
 from aiohttp import web
 
 from .路由公共 import (
-    _metrics_collector, local_model_client, llm_client,
+    _metrics_collector, local_model_client, llm_client, _记忆管理器,
 )
 from .文件读写操作 import save_session
 from .系统环境映射 import get_default_llm_path
-from .聊天路由 import _build_chat_context
+from .日志配置 import 获取日志器
+from .聊天路由 import _build_chat_context, _build_tool_executor
 
-_logger = logging.getLogger(__name__)
+logger = 获取日志器(__name__)
 
 
 class 连接管理器:
@@ -87,13 +87,13 @@ class 连接管理器:
                         _metrics_collector.decrement_connections(ws=True)
                     except Exception:
                         pass
-                    _logger.warning(
+                    logger.warning(
                         "WebSocket 连接因空闲超时被关闭，超时阈值=%ss", self.IDLE_TIMEOUT
                     )
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                _logger.exception("WebSocket 清理任务异常: %s", e)
+                logger.exception("WebSocket 清理任务异常: %s", e)
 
 
 # 全局连接管理器实例
@@ -110,7 +110,6 @@ async def websocket_handler(request):
     # 认证：首条消息必须是 auth
     authenticated = False
     user_info = None
-    auth_manager = request.app.get('auth_manager')
 
     _ws_connections.add(ws)
     _ws_manager.注册连接(ws)
@@ -132,23 +131,8 @@ async def websocket_handler(request):
 
                 # 认证消息
                 if msg_type == "auth":
-                    token = data.get("token", "")
-                    if auth_manager and auth_manager.has_users():
-                        payload = auth_manager.verify_token(token)
-                        if payload:
-                            authenticated = True
-                            user_info = payload
-                            await ws.send_json({"type": "auth_ok", "username": payload.get("username")})
-                        else:
-                            await ws.send_json({"type": "auth_error", "message": "Token 无效"})
-                    else:
-                        authenticated = True  # 单用户模式
-                        await ws.send_json({"type": "auth_ok", "username": "default"})
-                    continue
-
-                # 需要认证的操作
-                if not authenticated and auth_manager and auth_manager.has_users():
-                    await ws.send_json({"type": "error", "message": "请先认证"})
+                    authenticated = True  # 单用户模式
+                    await ws.send_json({"type": "auth_ok", "username": "default"})
                     continue
 
                 # 聊天消息
@@ -184,11 +168,13 @@ async def _handle_ws_chat(ws, request, session_id, message, user_info, data=None
 
     try:
         # 复用公共上下文构建
+        active_tab = data.get("active_tab", "develop")
         ctx = await _build_chat_context(
             request, session_id, message,
             attachments=data.get("attachments", []),
             plugin_context=data.get("plugin_context"),
-            data=data
+            data=data,
+            active_tab=active_tab
         )
 
         session_data = ctx["session_data"]
@@ -229,14 +215,38 @@ async def _handle_ws_chat(ws, request, session_id, message, user_info, data=None
                 await ws.send_json({"type": "error", "message": f"模型加载失败: {str(e)}"})
                 return
 
-            async for chunk in local_model_client.流式对话(complete_messages, settings):
-                if ws.closed:
-                    break
-                full_reply += chunk
-                await ws.send_json({"type": "chunk", "content": chunk, "done": False})
+            # 检查是否有插件路径，决定是否启用工具调用
+            plugin_path = ctx.get("plugin_path")
+            effective_plugin_path = plugin_path if (plugin_path and plugin_path.exists()) else None
+
+            if effective_plugin_path:
+                file_tools, _tool_executor = _build_tool_executor(effective_plugin_path)
+                async for chunk in local_model_client.流式对话_with_tools(
+                    complete_messages, settings, tools=file_tools, tool_executor=_tool_executor
+                ):
+                    if ws.closed:
+                        break
+                    # 区分工具执行状态和普通文本
+                    if chunk.strip().startswith("[正在执行:") and chunk.strip().endswith("...]"): 
+                        await ws.send_json({"type": "tool_executing", "content": chunk, "done": False})
+                    else:
+                        full_reply += chunk
+                        await ws.send_json({"type": "chunk", "content": chunk, "done": False})
+            else:
+                async for chunk in local_model_client.流式对话(complete_messages, settings):
+                    if ws.closed:
+                        break
+                    full_reply += chunk
+                    await ws.send_json({"type": "chunk", "content": chunk, "done": False})
         else:
-            # API 模式流式
-            async for chunk in llm_client.流式对话(complete_messages, settings):
+            # API 模式流式：如插件路径有效则启用 Function Calling
+            plugin_path = ctx.get("plugin_path")
+            file_tools, _tool_executor = _build_tool_executor(plugin_path)
+            async for chunk in llm_client.流式对话(
+                complete_messages, settings,
+                tools=file_tools,
+                tool_executor=_tool_executor,
+            ):
                 if ws.closed:
                     break
                 full_reply += chunk
@@ -252,7 +262,16 @@ async def _handle_ws_chat(ws, request, session_id, message, user_info, data=None
             ai_now = datetime.now().isoformat(timespec="seconds")
             ai_msg = {"role": "assistant", "content": clean_reply, "timestamp": ai_now}
             session_data["messages"].append(ai_msg)
-            save_session(session_data)
+            await asyncio.to_thread(save_session, session_data)
+
+            # 异步提取跨会话记忆（不阻塞响应）
+            if _记忆管理器 is not None:
+                _plugin_path = ctx.get("plugin_path")
+                _plugin_path_str = str(_plugin_path) if _plugin_path else None
+                asyncio.create_task(asyncio.to_thread(
+                    _记忆管理器.自动提取记忆,
+                    message, clean_reply, _plugin_path_str
+                ))
 
     except ValueError as e:
         if not ws.closed:

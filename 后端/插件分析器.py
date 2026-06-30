@@ -166,8 +166,8 @@ def resolve_js_import(import_info: dict, source_file: Path, plugin_path: Path, a
     return None
 
 
-def detect_circular_dependencies(links: list) -> list:
-    """使用 DFS 检测循环依赖，返回参与循环的连线索引列表"""
+def detect_circular_dependencies(links: list) -> tuple:
+    """使用 DFS 检测循环依赖，返回 (参与循环的连线索引列表, 循环路径列表)"""
     # 构建邻接表
     graph = {}
     for i, link in enumerate(links):
@@ -177,30 +177,36 @@ def detect_circular_dependencies(links: list) -> list:
         graph[source].append((link['target'], i))
 
     circular_link_indices = set()
+    circular_paths = []
     visited = set()
-    rec_stack = set()
+    rec_stack = {}
 
     def dfs(node, path):
         visited.add(node)
-        rec_stack.add(node)
+        rec_stack[node] = len(path)
+        path.append(node)
 
         for neighbor, link_idx in graph.get(node, []):
             if neighbor not in visited:
-                if dfs(neighbor, path + [link_idx]):
+                if dfs(neighbor, path):
                     circular_link_indices.add(link_idx)
                     return True
             elif neighbor in rec_stack:
                 circular_link_indices.add(link_idx)
+                cycle_start = rec_stack[neighbor]
+                cycle_path = path[cycle_start:]
+                circular_paths.append(list(cycle_path))
                 return True
 
-        rec_stack.discard(node)
+        path.pop()
+        del rec_stack[node]
         return False
 
     for node in graph:
         if node not in visited:
             dfs(node, [])
 
-    return list(circular_link_indices)
+    return list(circular_link_indices), circular_paths
 
 
 def analyze_plugin(plugin_path_str: str) -> dict:
@@ -252,12 +258,14 @@ def analyze_plugin(plugin_path_str: str) -> dict:
             "type": file_type,
             "size": size,
             "status": "normal",
-            "group": group
+            "group": group,
+            "reason": ""
         })
 
     # 3. 解析依赖，生成连线
     links = []
     error_count = 0
+    import_failure_sources = {}
 
     for rel_path in all_file_paths:
         full_path = plugin_path / rel_path
@@ -275,14 +283,15 @@ def analyze_plugin(plugin_path_str: str) -> dict:
                         "status": "normal"
                     })
                 elif imp.get('level', 0) > 0:
-                    # 相对导入但找不到目标 = 错误
+                    # 相对导入但找不到目标 = 警告
                     links.append({
                         "source": rel_path,
                         "target": f"[未找到] {imp['module']}",
                         "type": "import",
-                        "status": "error"
+                        "status": "warning",
+                        "reason": f"导入目标未找到：{imp['module']}"
                     })
-                    error_count += 1
+                    import_failure_sources.setdefault(rel_path, []).append(imp['module'])
 
         elif file_type == 'javascript':
             imports = parse_js_imports(full_path)
@@ -296,19 +305,21 @@ def analyze_plugin(plugin_path_str: str) -> dict:
                         "status": "normal"
                     })
                 elif imp['module'].startswith('.'):
-                    # 相对路径但找不到 = 错误
+                    # 相对路径但找不到 = 警告
                     links.append({
                         "source": rel_path,
                         "target": f"[未找到] {imp['module']}",
                         "type": "import",
-                        "status": "error"
+                        "status": "warning",
+                        "reason": f"导入目标未找到：{imp['module']}"
                     })
-                    error_count += 1
+                    import_failure_sources.setdefault(rel_path, []).append(imp['module'])
 
     # 4. 检测循环依赖
-    circular_indices = detect_circular_dependencies(links)
+    circular_indices, circular_paths = detect_circular_dependencies(links)
     for idx in circular_indices:
         links[idx]['status'] = 'error'
+        links[idx]['reason'] = '循环依赖'
     circular_count = len(circular_indices)
     error_count += circular_count
 
@@ -321,10 +332,26 @@ def analyze_plugin(plugin_path_str: str) -> dict:
     for node in nodes:
         if node['id'] in error_sources:
             node['status'] = 'error'
+            involved = [p for p in circular_paths if node['id'] in p]
+            if involved:
+                reasons = []
+                for cycle in involved:
+                    path_str = ' → '.join(cycle + [cycle[0]])
+                    reasons.append(path_str)
+                node['reason'] = f"循环依赖链：{'; '.join(reasons)}"
+            else:
+                node['reason'] = "循环依赖链：检测到循环依赖"
+
+    # 6. 标记有导入失败但非循环依赖的节点为 warning
+    for node in nodes:
+        if node['id'] in import_failure_sources and node['status'] == 'normal':
+            node['status'] = 'warning'
+            modules = import_failure_sources[node['id']]
+            node['reason'] = f"未解析的导入：{', '.join(modules)}"
 
     return {
         "nodes": nodes,
-        "links": [l for l in links if not l['target'].startswith('[未找到]') or l['status'] == 'error'],
+        "links": [l for l in links if not l['target'].startswith('[未找到]')],
         "stats": {
             "total_files": len(nodes),
             "error_count": error_count,

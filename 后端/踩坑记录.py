@@ -192,11 +192,7 @@ def _标记已同步_同步(faq_id: str, status: str):
 async def 创建记录(request: web.Request) -> web.Response:
     """POST /ai-coder/faq/create"""
     try:
-        from .路由公共 import _check_auth
-        auth_resp = await _check_auth(request)
-        if auth_resp is not None:
-            return auth_resp
-        author = request.get('user', {}).get('sub', 'anonymous')
+        author = 'anonymous'
 
         data = await request.json()
         title = (data.get("title") or "").strip()

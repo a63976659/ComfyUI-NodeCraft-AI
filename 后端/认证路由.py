@@ -10,7 +10,7 @@
 """
 from aiohttp import web
 
-from .路由公共 import _check_auth, _分页参数, _分页响应
+from .路由公共 import _分页参数, _分页响应
 from .接口文档 import docs_page, openapi_json
 from .性能监控 import get_metrics_collector
 
@@ -21,17 +21,7 @@ async def get_audit_logs(request):
     支持分页：?page=1&page_size=20，最大 page_size=100。
     向后兼容：未传递分页参数时返回默认 50 条记录。
     """
-    auth_error = await _check_auth(request)
-    if auth_error:
-        return auth_error
-    # Bug 16 修复：require_auth 中间件将 payload 写入 request['user']，
-    # 但理论上其他中间件可能注入非 dict 类型；增加类型检查防止 AttributeError。
-    user_data = request.get('user')
     user = None
-    if isinstance(user_data, dict):
-        user = user_data.get('sub')
-    elif user_data is not None and hasattr(user_data, 'get'):
-        user = user_data.get('sub')
     audit_logger = request.app['audit_logger']
 
     page, page_size, paginated = _分页参数(request)
@@ -50,9 +40,6 @@ async def get_audit_logs(request):
 
 async def metrics_handler(request):
     """获取性能指标"""
-    auth_error = await _check_auth(request)
-    if auth_error:
-        return auth_error
     collector = get_metrics_collector()
     return web.json_response({"success": True, "data": collector.get_metrics()})
 

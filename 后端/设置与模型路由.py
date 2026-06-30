@@ -13,9 +13,9 @@ from aiohttp import web
 import asyncio
 
 from .路由公共 import (
-    _check_auth, _error_response, _success_response, _rate_limiter,
+    _error_response, _success_response, _rate_limiter,
     llm_client, local_model_client,
-    _分页参数, _分页响应,
+    _分页参数, _分页响应, _记忆管理器,
 )
 from .文件读写操作 import load_settings, save_settings
 from .系统环境映射 import get_default_llm_path
@@ -85,10 +85,6 @@ async def handle_select_folder(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         try:
             data = await request.json()
         except Exception:
@@ -113,15 +109,13 @@ async def handle_select_folder(request):
 async def handle_get_settings(request):
     """获取当前设置（含 default_local_path）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         # P1-1：同步 I/O 放入线程池
         settings = await asyncio.to_thread(load_settings)
         settings["default_local_path"] = str(get_default_llm_path())
         return web.json_response(settings)
     except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
+        logger.exception(f"[诊断] 获取设置异常: {e}")
+        return web.json_response({"success": False, "error": "服务器内部错误，请查看日志"}, status=500)
 
 
 async def handle_save_settings(request):
@@ -130,10 +124,6 @@ async def handle_save_settings(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         data = await request.json()
         # 移除前端附加的非持久化字段
@@ -148,12 +138,8 @@ async def handle_save_settings(request):
 # ─── 模型管理 ─────────────────────────────────────────────
 
 async def handle_model_capabilities(request):
-    """返回当前配置模型的能力信息（是否支持 vision 等）"""
+    """返回当前配置模型的能力信息及模型注册表能力列表"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         settings = await asyncio.to_thread(load_settings)
         # 允许前端以 query 参数临时覆盖（例如切换模型后立即查询但设置未保存场景）
         model_source = request.query.get("model_source") or settings.get("model_source", "api")
@@ -169,12 +155,19 @@ async def handle_model_capabilities(request):
             except Exception:
                 supports_vision = False
 
+        # 获取模型注册表能力列表
+        from 智能体.模型能力注册表 import 模型能力注册表
+        registry = 模型能力注册表()
+        registry_models = registry.列出可用模型()
+
         return _success_response({
             "model_source": model_source,
             "model_name": model_name,
             "supports_vision": supports_vision,
             # 文本文件内容始终支持（后端会解码 base64 并内联到消息）
             "supports_file_content": True,
+            # 模型注册表能力列表
+            "available_models": registry_models,
         })
     except Exception as e:
         return _error_response(f"获取模型能力失败: {str(e)}", 500)
@@ -186,10 +179,6 @@ async def handle_unload_model(request):
         client_ip = request.remote or "unknown"
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
-
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
 
         if local_model_client is not None:
             # P0-4: 使用异步卸载（与加载共享同一 asyncio.Lock）防止与并发加载发生竞态
@@ -207,10 +196,6 @@ async def handle_reset_model_status(request):
         if not _rate_limiter.is_allowed(client_ip):
             return _error_response("请求过于频繁，请稍后重试", 429)
 
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
-
         data = await request.json()
         model_name = data.get("model_name", None)
         if local_model_client is not None:
@@ -226,9 +211,6 @@ async def handle_reset_model_status(request):
 async def handle_get_local_models(request):
     """扫描本地 LLM 目录，返回可用模型列表（支持分页：?page=1&page_size=20，最大 page_size=100）"""
     try:
-        auth_error = await _check_auth(request)
-        if auth_error:
-            return auth_error
         llm_path = get_default_llm_path()
         models = []
 
@@ -257,7 +239,74 @@ async def handle_get_local_models(request):
         return web.json_response(payload)
     except Exception as e:
         logger.exception(f"[诊断] 本地模型扫描异常: {e}")
-        return web.json_response({"models": [], "error": str(e)}, status=200)
+        return web.json_response({"models": [], "error": "服务器内部错误，请查看日志"}, status=500)
+
+
+# ─── 跨会话记忆管理 ─────────────────────────────────────
+
+async def handle_get_memories(request):
+    """获取跨会话记忆数据（可选 plugin_path 参数筛选插件记忆）"""
+    try:
+        if _记忆管理器 is None:
+            return _error_response("记忆系统未初始化", 503)
+
+        plugin_path = request.query.get("plugin_path") or None
+        data = await asyncio.to_thread(_记忆管理器.获取记忆, plugin_path)
+        return _success_response(data)
+    except Exception as e:
+        logger.exception(f"获取记忆数据异常: {e}")
+        return _error_response(f"获取记忆失败: {str(e)}", 500)
+
+
+async def handle_clear_memories(request):
+    """清除跨会话记忆
+
+    - 请求体携带 plugin_path 时：清除该插件的记忆
+    - 不传 plugin_path 时：清除全局记忆
+    - type=“item” 且携带 index 参数时：删除单条记忆
+    """
+    try:
+        client_ip = request.remote or "unknown"
+        if not _rate_limiter.is_allowed(client_ip):
+            return _error_response("请求过于频繁，请稍后重试", 429)
+
+        if _记忆管理器 is None:
+            return _error_response("记忆系统未初始化", 503)
+
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        plugin_path = (data or {}).get("plugin_path") or None
+
+        # 单条删除模式
+        if (data or {}).get("type") == "item":
+            index = (data or {}).get("index")
+            记忆类型 = (data or {}).get("记忆类型") or (data or {}).get("category")
+            if index is None or 记忆类型 is None:
+                return _error_response("删除单条记忆需要 index 和 记忆类型 参数", 400)
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                return _error_response("index 必须为整数", 400)
+            success = await asyncio.to_thread(
+                _记忆管理器.删除单条记忆, 记忆类型, index, plugin_path
+            )
+            if success:
+                return _success_response(message="记忆条目已删除")
+            else:
+                return _error_response("记忆条目不存在或已删除", 404)
+
+        # 批量清除
+        await asyncio.to_thread(_记忆管理器.清除记忆, plugin_path)
+        if plugin_path:
+            return _success_response(message=f"已清除插件记忆: {plugin_path}")
+        else:
+            return _success_response(message="已清除全局记忆")
+    except Exception as e:
+        logger.exception(f"清除记忆异常: {e}")
+        return _error_response(f"清除记忆失败: {str(e)}", 500)
 
 
 def register_设置与模型路由(routes):
@@ -269,3 +318,6 @@ def register_设置与模型路由(routes):
     routes.post("/ai-coder/reset-model-status")(handle_reset_model_status)
     routes.get("/ai-coder/local-models")(handle_get_local_models)
     routes.post("/ai-coder/select-folder")(handle_select_folder)
+    # 跨会话记忆管理
+    routes.get("/ai-coder/memories")(handle_get_memories)
+    routes.delete("/ai-coder/memories")(handle_clear_memories)
