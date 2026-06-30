@@ -23,9 +23,10 @@ NodeCraft AI 的做法不同：我们针对 ComfyUI 插件开发场景，配备�
 | 🧩 | **三Tab多界面** | 开发插件 / 优化插件 / 功能可视化，按场景独立工作流 |
 | 📚 | **场景化知识库** | 按 Tab 隔离的 BM25 多实例检索 + RAG 增强生成 |
 | 🪤 | **踩坑记录系统** | 本地结构化存储 + ModelScope 云端双向同步，AI 自动检索注入上下文 |
-| 💬 | **流式智能对话** | SSE 打字机效果 + Function Calling 直接读写插件文件（API 15 轮循环） |
+| 💬 | **流式智能对话** | SSE 打字机效果 + Function Calling 直接读写插件文件（API 25 轮循环） |
 | 🔗 | **互斥文件夹选择** | 插件列表与会话文件夹自动互斥，防止操作冲突 |
 | 🔄 | **双模型支持** | 在线 API（OpenAI 兼容）与本地模型一键切换，支持图片多模态 |
+| ☁️ | **云端API统一代理** | 平台集中管理API密钥，用户无需自配Key，按token用量计费 |
 | 🧠 | **上下文压缩** | 长对话自动 Token 裁剪，保留关键记忆不丢失 |
 | 🎨 | **双主题界面** | Neo-Noir 暗黑 + 优雅浅色，响应式适配移动端 |
 | 📂 | **多会话管理** | 独立历史、标题编辑、文件/图片附件上传 |
@@ -42,7 +43,14 @@ NodeCraft AI 的做法不同：我们针对 ComfyUI 插件开发场景，配备�
 
 ## 📦 安装
 
-### 方式一：Git 安装（推荐）
+### 通过精选社区：ComfyUI-Ranking 安装（推荐）
+
+1.打开精选社区搜索节点铸造师点击安装
+
+2.重启 ComfyUI，在侧边栏即可看到 节点梦工厂 图标
+
+
+## ComfyUI-Ranking 安装
 
 1. 打开终端，进入 ComfyUI 的 `custom_nodes` 目录：
 
@@ -53,28 +61,12 @@ cd ComfyUI/custom_nodes
 2. 克隆项目：
 
 ```bash
-git clone https://github.com/a63976659/ComfyUI-NodeCraft-AI.git
+git clone https://github.com/a63976659/ComfyUI-Ranking.git
 ```
 
-3. 安装依赖：
+3.  重启 ComfyUI，在侧边栏即可看到 社区精选 图标。
 
-```bash
-cd ComfyUI-NodeCraft-AI
-pip install -r requirements.txt
-```
 
-4. 重启 ComfyUI，在侧边栏即可看到 NodeCraft AI 图标。
-
-### 方式二：ComfyUI Manager
-
-在 ComfyUI Manager 中搜索 `NodeCraft AI`，点击安装即可。
-
-### 方式三：手动下载
-
-1. 前往 [GitHub 页面](https://github.com/a63976659/ComfyUI-NodeCraft-AI)，点击 **Code → Download ZIP**
-2. 解压到 `ComfyUI/custom_nodes/` 目录下
-3. 确保文件夹名称为 `ComfyUI-NodeCraft-AI`
-4. 安装依赖后重启 ComfyUI
 
 ---
 
@@ -92,12 +84,12 @@ pip install -r requirements.txt
 
 ## ⚙️ 模型配置说明
 
-### API 模式（在线）
+### 云端模式（推荐）
 
-支持任何兼容 OpenAI 格式的 API 服务，只需填入：
-- API 地址（如 `https://api.deepseek.com/v1`）
-- 密钥（API Key）
-- 模型名称
+注册并登录后，API 由云端统一管理，用户无需配置任何密钥：
+- 设置面板中选择模型即可使用
+- 按实际 Token 消耗计费，费用透明
+- 支持多用户并发，流式响应
 
 ### 本地模式
 
@@ -149,7 +141,8 @@ NodeCraft AI 采用清晰的四层架构设计：
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
-| 2026-06-22 | v0.12.0 | 🤖 本地模型工具调用适配层（已完成）、API 工具调用上限提升至 15 轮 |
+| 2026-06-30 | v0.13.0 | ☁️ 云端API统一代理架构、管理面板API配置、移除本地API Key配置、Gradio延迟挂载优化 |
+| 2026-06-22 | v0.12.0 | 🤖 本地模型工具调用适配层（已完成）、API 工具调用上限提升至 25 轮 |
 | 2026-06-21 | v0.11.0 | 🔧 后端认证体系清理（移除旧本地认证，RanKing 完全替代）、文件夹选择互斥机制 |
 | 2026-06-20 | v0.10.0 | 📋 三界面独立会话列表、会话列表面板公共组件、释放显存按钮统一、取消按钮 |
 | 2026-06-17 | v0.9.0 | 📚 知识库按 Tab 隔离、AI 自动检索踩坑记录、云端双向同步 |
@@ -165,6 +158,7 @@ NodeCraft AI 采用清晰的四层架构设计：
 
 - ✅ 本地模型工具调用适配层（文本标记解析）— 已完成
 - ✅ TF-IDF 向量检索器增强知识库精度 — 已完成
+- ✅ 云端API统一代理架构 — 已完成
 - 🔜 插件模板市场
 - 🔜 更多知识库内容持续完善（优化、可视化）
 
