@@ -1,10 +1,12 @@
 // ═══════════════════════════════════════════════════════════════
 // 文件编辑器.js — 插件文件编辑器（文件树 + 代码编辑区）
 // NodeCraft AI — Luxury Terminal / Neo-Noir Hacker
+// ──── 注意：导出 `创建文件编辑器面板` 当前无 UI 入口调用，调用链未接入 ────
 // ═══════════════════════════════════════════════════════════════
 
 import { el, NCA_STORAGE_KEYS, Toast } from "./工具函数.js";
-import { 事件总线, 事件 } from "./交互与状态.js";
+import { 事件总线, 事件, 状态 } from "./交互与状态.js";
+import { 创建代码补全器 } from "./代码补全器.js";
 
 const API_BASE = "/ai-coder";
 
@@ -115,6 +117,14 @@ export function 创建文件编辑器面板(options = {}) {
     const emptyState = el("div", { class: "nca-file-editor-empty" });
     emptyState.innerHTML = '<div><div class="nca-file-editor-empty-icon">📂</div><div>请先选择插件文件夹</div></div>';
 
+    // ─── 代码补全器初始化 ──────────────────────────────────────
+    // 在 textarea 创建后、事件监听绑定前初始化，确保 keydown 捕获优先于 Tab 缩进处理
+    const 补全器 = 创建代码补全器(textarea, {
+        当前文件路径获取: () => 当前文件路径,
+        插件上下文获取: () => 当前文件夹 || "",
+        模型来源获取: () => 状态.模型来源,
+    });
+
     // ─── 功能方法 ──────────────────────────────────────────────
 
     function 更新Dirty状态() {
@@ -219,14 +229,75 @@ export function 创建文件编辑器面板(options = {}) {
         }
     }
 
+    function 生成简单Diff(original, modified) {
+        const origLines = original.split('\n');
+        const modLines = modified.split('\n');
+
+        let startOld = 0, startNew = 0;
+        let endOld = origLines.length - 1, endNew = modLines.length - 1;
+
+        while (startOld < origLines.length && startNew < modLines.length
+               && origLines[startOld] === modLines[startNew]) {
+            startOld++; startNew++;
+        }
+
+        while (endOld >= startOld && endNew >= startNew
+               && origLines[endOld] === modLines[endNew]) {
+            endOld--; endNew--;
+        }
+
+        if (startOld > endOld && startNew > endNew) return null;
+
+        const ctxBefore = startOld > 0 ? 1 : 0;
+        const ctxAfter = endOld < origLines.length - 1 ? 1 : 0;
+
+        const oldStart = startOld - ctxBefore + 1;
+        const newStart = startNew - ctxBefore + 1;
+        const oldCount = ctxBefore + (endOld - startOld + 1) + ctxAfter;
+        const newCount = ctxBefore + (endNew - startNew + 1) + ctxAfter;
+
+        let patch = `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
+
+        if (ctxBefore) patch += ` ${origLines[startOld - 1]}\n`;
+        for (let i = startOld; i <= endOld; i++) patch += `-${origLines[i]}\n`;
+        for (let i = startNew; i <= endNew; i++) patch += `+${modLines[i]}\n`;
+        if (ctxAfter) patch += ` ${origLines[endOld + 1]}\n`;
+
+        return patch;
+    }
+
     async function 保存文件() {
         if (!当前文件路径 || !是否dirty) return;
 
         saveBtn.disabled = true;
         saveBtn.textContent = "保存中...";
         try {
-            await 请求文件("/write-file", { file_path: 当前文件路径, content: textarea.value });
-            原始内容 = textarea.value;
+            const 当前内容 = textarea.value;
+
+            // 如果有原始内容，尝试增量保存
+            if (原始内容 && 原始内容 !== 当前内容) {
+                const diff = 生成简单Diff(原始内容, 当前内容);
+                if (diff) {
+                    try {
+                        await 请求文件("/edit-file", {
+                            file_path: 当前文件路径,
+                            plugin_path: 当前文件夹,
+                            patch: diff
+                        });
+                        原始内容 = 当前内容;
+                        是否dirty = false;
+                        更新Dirty状态();
+                        Toast.success("文件已增量保存");
+                        return;
+                    } catch (e) {
+                        console.warn("增量保存失败，回退到全量保存", e);
+                    }
+                }
+            }
+
+            // 全量保存（新建文件或增量保存失败时）
+            await 请求文件("/write-file", { file_path: 当前文件路径, content: 当前内容 });
+            原始内容 = 当前内容;
             是否dirty = false;
             更新Dirty状态();
             Toast.success("文件已保存");
@@ -279,6 +350,7 @@ export function 创建文件编辑器面板(options = {}) {
         },
         destroy() {
             事件总线.off(事件.插件选择变更, 处理插件选择变更);
+            补全器.destroy();
         },
     };
 }

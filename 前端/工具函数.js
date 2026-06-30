@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 // ─── 常量定义 ─────────────────────────────────────────────────
-export const NCA_COLORS = {
+const NCA_COLORS = {
     accent: '#00ffc8',
     blue: '#00d4ff',
     purple: '#8b5cf6',
@@ -24,7 +24,8 @@ export const NCA_STORAGE_KEYS = {
 // 主题类施加在本插件自有根 .nca-sidebar-root 上，避免污染 ComfyUI 共享侧边栏容器。
 // CSS 变量沿 DOM 继承覆盖 :root 默认值，无需重新加载。
 export function 获取主题() {
-    const v = localStorage.getItem(NCA_STORAGE_KEYS.theme);
+    let v = null;
+    try { v = localStorage.getItem(NCA_STORAGE_KEYS.theme); } catch (_) {}
     return v === 'light' ? 'light' : 'dark';
 }
 
@@ -43,8 +44,14 @@ export function 应用主题(target, theme) {
 export function 切换主题(container) {
     const next = 获取主题() === 'light' ? 'dark' : 'light';
     应用主题(container, next);
-    localStorage.setItem(NCA_STORAGE_KEYS.theme, next);
+    try { localStorage.setItem(NCA_STORAGE_KEYS.theme, next); } catch (_) {}
     return next;
+}
+
+// ─── 安全 localStorage 读取 ───────────────────────────────────
+// 隐私模式或存储空间已满时 localStorage 可能不可用，统一防护
+export function 安全存储读(key, 默认值 = "") {
+    try { const v = localStorage.getItem(key); return v !== null ? v : 默认值; } catch (_) { return 默认值; }
 }
 
 export const NCA_API_BASE = '/ai-coder';
@@ -104,9 +111,65 @@ export function el(tag, attrs = {}, children = []) {
 
 // ─── Markdown 渲染 ───────────────────────────────────────────
 // HTML 转义工具
-function _转义HTML(s) {
+export function _转义HTML(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/**
+ * 安全纯文本渲染：DOMPurify 未加载完成时使用
+ * 转义所有 HTML 标签，仅保留纯文本 + 换行
+ */
+function _安全纯文本渲染(text) {
+    if (!text) return "";
+    return _转义HTML(text).replace(/\n/g, "<br>");
+}
+
+// ─── Diff 代码渲染辅助 ─────────────────────────────────────
+
+/**
+ * 渲染 diff 代码块（用于 raw 未转义内容，如 marked.js 输出）
+ * 逐行检测前缀并包裹对应 CSS 类 span
+ */
+function _渲染Diff代码(code) {
+    if (!code) return '';
+    const lines = code.split('\n');
+    return lines.map(line => {
+        const escaped = _转义HTML(line);
+        if (line.startsWith('+++') || line.startsWith('---')) {
+            return `<span class="nca-diff-meta">${escaped}</span>`;
+        } else if (line.startsWith('@@')) {
+            return `<span class="nca-diff-hunk">${escaped}</span>`;
+        } else if (line.startsWith('+')) {
+            return `<span class="nca-diff-add">${escaped}</span>`;
+        } else if (line.startsWith('-')) {
+            return `<span class="nca-diff-del">${escaped}</span>`;
+        } else {
+            return `<span class="nca-diff-ctx">${escaped}</span>`;
+        }
+    }).join('\n');
+}
+
+/**
+ * 包装已转义的 diff 行（用于 _正则Markdown渲染，内容已被整体转义）
+ * 仅添加 span 标签，不做额外转义
+ */
+function _包装Diff行(code) {
+    if (!code) return '';
+    const lines = code.split('\n');
+    return lines.map(line => {
+        if (line.startsWith('+++') || line.startsWith('---')) {
+            return `<span class="nca-diff-meta">${line}</span>`;
+        } else if (line.startsWith('@@')) {
+            return `<span class="nca-diff-hunk">${line}</span>`;
+        } else if (line.startsWith('+')) {
+            return `<span class="nca-diff-add">${line}</span>`;
+        } else if (line.startsWith('-')) {
+            return `<span class="nca-diff-del">${line}</span>`;
+        } else {
+            return `<span class="nca-diff-ctx">${line}</span>`;
+        }
+    }).join('\n');
 }
 
 // 原有正则渲染——作为 marked.js 加载前/失败时的降级方案
@@ -118,7 +181,11 @@ function _正则Markdown渲染(text) {
     // 代码块 — 带语言标签和复制按钮
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
         const langLabel = lang ? `<span class="nca-code-lang">${lang}</span>` : "";
-        return `<pre>${langLabel}<code class="lang-${lang}">${code.trim()}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
+        // diff 语言特殊渲染：逐行着色（code 已被转义，仅需包装 span）
+        if (lang === 'diff' || lang === 'patch') {
+            return `<pre>${langLabel}<code class="lang-diff nca-diff-block">${_包装Diff行(code.trim())}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
+        }
+        return `<pre>${langLabel}<code class="language-${lang}">${code.trim()}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
     });
 
     // 行内代码
@@ -142,6 +209,25 @@ function _正则Markdown渲染(text) {
 let _markedLib = null;
 let _markedLoading = null;
 let _markedRenderer = null;
+
+// ─── Prism.js 语法高亮 ──────────────────────────────────────
+let _prismLoaded = null; // null=未加载, Promise=加载中
+
+/**
+ * 通用脚本加载器（支持自定义属性，如 data-manual）
+ * 返回 Promise，加载成功 resolve，失败 reject 并移除 script 标签
+ */
+function _加载脚本(url, attrs = {}) {
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        for (const [k, v] of Object.entries(attrs)) script.setAttribute(k, v);
+        script.onload = () => resolve();
+        script.onerror = () => { script.remove(); reject(new Error('加载失败: ' + url)); };
+        document.head.appendChild(script);
+    });
+}
 
 // ─── DOMPurify XSS 消毒 ──────────────────────────────────────
 // 三级降级防线：DOMPurify(CDN) → _本地消毒(DOMParser 白名单) → _转义HTML(全转义)
@@ -241,18 +327,38 @@ export function 加载DOMPurify库() {
     }
     if (_domPurifyLoading) return _domPurifyLoading;
 
+    // 本地优先，CDN 回退；import.meta.url 可正确解析 ComfyUI 模块路径
+    const _purifyLocalPath = new URL('./lib/purify.min.js', import.meta.url).href;
+    const _purifyCdnPath = 'https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js';
+
     _domPurifyLoading = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js';
-        script.async = true;
-        script.onload = () => {
+        const onLoad = () => {
             _domPurifyLib = window.DOMPurify;
+            // 通知消息渲染器：DOMPurify 已就绪，可安全重新渲染
+            window.dispatchEvent(new CustomEvent('nca-dompurify-ready'));
             resolve(_domPurifyLib);
         };
-        script.onerror = (e) => {
+        const onError = (e) => {
             _domPurifyLoading = null;
             console.warn('[节点梦工厂] DOMPurify 加载失败，降级使用本地消毒（DOMParser 白名单）');
+            // 通知消息渲染器：DOMPurify 加载失败，用 _本地消毒 重渲染待处理消息
+            window.dispatchEvent(new CustomEvent('nca-dompurify-failed'));
             reject(e);
+        };
+        const script = document.createElement('script');
+        script.src = _purifyLocalPath;
+        script.async = true;
+        script.onload = onLoad;
+        script.onerror = () => {
+            // 本地加载失败，回退到 CDN
+            console.warn('[节点梦工厂] DOMPurify 本地加载失败，回退到 CDN');
+            script.remove();
+            const cdnScript = document.createElement('script');
+            cdnScript.src = _purifyCdnPath;
+            cdnScript.async = true;
+            cdnScript.onload = onLoad;
+            cdnScript.onerror = onError;
+            document.head.appendChild(cdnScript);
         };
         document.head.appendChild(script);
     });
@@ -272,19 +378,35 @@ export function 加载Marked库() {
     }
     if (_markedLoading) return _markedLoading;
 
+    // 本地优先，CDN 回退；import.meta.url 可正确解析 ComfyUI 模块路径
+    const _markedLocalPath = new URL('./lib/marked.min.js', import.meta.url).href;
+    const _markedCdnPath = 'https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js';
+
     _markedLoading = new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/marked@12/marked.min.js';
-        script.async = true;
-        script.onload = () => {
+        const onLoad = () => {
             _markedLib = window.marked;
             try { _配置Marked(); } catch (e) { console.warn('[节点梦工厂] marked 配置失败:', e); }
             resolve(_markedLib);
         };
-        script.onerror = (e) => {
+        const onError = (e) => {
             _markedLoading = null;
             console.warn('[节点梦工厂] marked.js 加载失败，降级使用正则渲染');
             reject(e);
+        };
+        const script = document.createElement('script');
+        script.src = _markedLocalPath;
+        script.async = true;
+        script.onload = onLoad;
+        script.onerror = () => {
+            // 本地加载失败，回退到 CDN
+            console.warn('[节点梦工厂] marked.js 本地加载失败，回退到 CDN');
+            script.remove();
+            const cdnScript = document.createElement('script');
+            cdnScript.src = _markedCdnPath;
+            cdnScript.async = true;
+            cdnScript.onload = onLoad;
+            cdnScript.onerror = onError;
+            document.head.appendChild(cdnScript);
         };
         document.head.appendChild(script);
     });
@@ -303,7 +425,11 @@ function _配置Marked() {
         }
         const lang = (language || '').toString().trim();
         const langLabel = lang ? `<span class="nca-code-lang">${_转义HTML(lang)}</span>` : '';
-        return `<pre>${langLabel}<code class="lang-${_转义HTML(lang)}">${_转义HTML(code)}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
+        // diff 语言特殊渲染：逐行着色
+        if (lang === 'diff' || lang === 'patch') {
+            return `<pre>${langLabel}<code class="lang-diff nca-diff-block">${_渲染Diff代码(code)}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
+        }
+        return `<pre>${langLabel}<code class="language-${_转义HTML(lang)}">${_转义HTML(code)}</code><button class="nca-code-copy" title="复制">复制</button></pre>`;
     };
     // XSS 安全：marked 默认透传原始 HTML，强制转义
     _markedRenderer.html = function(html) {
@@ -337,6 +463,12 @@ function _配置Marked() {
  */
 export function 简易Markdown渲染(text) {
     if (!text) return "";
+    // DOMPurify 正在异步加载中：使用纯文本渲染（转义所有 HTML）避免 XSS 风险
+    // 加载完成后派发 nca-dompurify-ready 事件，消息渲染器监听后重新渲染
+    // 加载失败时 _domPurifyLoading 被置 null，降级到 markdown + _本地消毒
+    if (!_domPurifyLib && _domPurifyLoading) {
+        return _安全纯文本渲染(text);
+    }
     let result;
     if (_markedLib) {
         try {
@@ -348,10 +480,7 @@ export function 简易Markdown渲染(text) {
     } else {
         result = _正则Markdown渲染(text);
     }
-    // 消毒最终防线（三级降级）：
-    //   1) DOMPurify（CDN 已加载）— 最严格、最完整
-    //   2) _本地消毒（DOMParser 白名单）— 离线/CDN 失败时的精确过滤
-    //   3) _转义HTML（_本地消毒 内部兜底）— 极端环境无 DOM API
+    // DOMPurify 已加载完成时直接消毒；否则降级到 _本地消毒
     if (_domPurifyLib) {
         try {
             return _domPurifyLib.sanitize(result, _purifyConfig);
@@ -362,7 +491,75 @@ export function 简易Markdown渲染(text) {
     return _本地消毒(result);
 }
 
-// 模块加载即触发 marked.js 与 DOMPurify 异步预加载（不阻塞）
+// ─── Prism.js 语法高亮加载与应用 ────────────────────────────
+/**
+ * 异步加载 Prism.js（本地优先，CDN 回退）
+ * 使用 autoloader 插件按需加载语言组件，无需手动管理语言包
+ * 加载失败时降级为纯文本渲染，不影响功能
+ */
+export function 加载Prism库() {
+    if (typeof Prism !== 'undefined') return Promise.resolve(true);
+    if (_prismLoaded) return _prismLoaded;
+
+    const _prismLocalPath = new URL('./lib/prism.min.js', import.meta.url).href;
+    const _prismAutoloaderLocalPath = new URL('./lib/prism-autoloader.min.js', import.meta.url).href;
+    const _prismCssLocalPath = new URL('./lib/prism-theme.css', import.meta.url).href;
+    const _prismCdnPath = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js';
+    const _prismAutoloaderCdnPath = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js';
+    const _prismComponentsCdn = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/';
+
+    // 加载 Prism CSS 主题（仅 token 着色，容器样式由项目 CSS 控制）
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = _prismCssLocalPath;
+    document.head.appendChild(link);
+
+    _prismLoaded = (async () => {
+        // 本地优先，CDN 回退；data-manual 禁用 Prism 自动高亮（由 应用Prism高亮 手动控制）
+        for (const [corePath, autoloaderPath] of [
+            [_prismLocalPath, _prismAutoloaderLocalPath],
+            [_prismCdnPath, _prismAutoloaderCdnPath],
+        ]) {
+            try {
+                await _加载脚本(corePath, { 'data-manual': '' });
+                if (typeof Prism !== 'undefined') Prism.manual = true;
+                await _加载脚本(autoloaderPath);
+                if (typeof Prism !== 'undefined') {
+                    // 配置 autoloader 语言组件 CDN 路径（本地加载时需要）
+                    if (Prism.plugins && Prism.plugins.autoloader) {
+                        Prism.plugins.autoloader.languages_path = _prismComponentsCdn;
+                    }
+                    return true;
+                }
+            } catch (_) { /* 尝试下一个源 */ }
+        }
+        _prismLoaded = null;
+        console.warn('[节点梦工厂] Prism.js 加载失败，代码块保持纯文本渲染');
+        return false;
+    })();
+    return _prismLoaded;
+}
+
+/**
+ * 对容器内所有带 language- class 的代码块应用 Prism 高亮
+ * 幂等：通过 data-prism-highlighted 属性防止重复高亮
+ * 异步：Prism 未加载时先触发加载，加载完成后自动高亮
+ */
+export function 应用Prism高亮(container) {
+    if (!container) return;
+    const codes = container.querySelectorAll('pre code[class*="language-"]:not([data-prism-highlighted])');
+    if (codes.length === 0) return;
+    加载Prism库().then(loaded => {
+        if (!loaded || typeof Prism === 'undefined') return;
+        codes.forEach(el => {
+            if (el.hasAttribute('data-prism-highlighted')) return;
+            el.setAttribute('data-prism-highlighted', '1');
+            try { Prism.highlightElement(el); } catch (_) {}
+        });
+    });
+}
+
+// 模块加载即触发 marked.js、DOMPurify 与 Prism 异步预加载（不阻塞）
 if (typeof window !== 'undefined') {
     加载Marked库().catch(() => { /* 失败时静默降级 */ });
     加载DOMPurify库().catch(() => {
@@ -372,6 +569,7 @@ if (typeof window !== 'undefined') {
             try { Toast.info("部分资源使用离线模式加载"); } catch (_) {}
         }
     });
+    加载Prism库().catch(() => { /* 失败时静默降级为纯文本 */ });
 }
 
 // ─── 全局 Toast 通知系统 ─────────────────────────────────────
@@ -444,6 +642,7 @@ export const Toast = {
 
 // ─── 通用提示条（向后兼容入口，统一路由到 Toast.info） ─────────
 // container 参数已弃用，保留仅为向后兼容；新代码请直接使用 Toast.<type>(...)
+/** @deprecated 使用 Toast 替代 */
 export function 显示提示(_container, text, type = 'info') {
     return Toast.show(text, type);
 }
@@ -500,6 +699,6 @@ export function 移除视觉能力警告(inputArea) {
     if (banner) banner.remove();
 }
 
-export function 重置视觉警告状态() {
+function 重置视觉警告状态() {
     _visionWarningDismissed = false;
 }

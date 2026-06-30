@@ -9,14 +9,12 @@ import {
     加载设置, 保存设置, 更新模型选择, 设置插件文件夹,
     获取当前模型名称, 获取会话序号,
     获取本地模型列表, 推导平台名称,
-    graphqlClient,
+    请求,
 } from "./交互与状态.js";
-import { UNLOAD_MODEL } from "./graphql查询模板.js";
-import { 销毁图 } from "./可视化引擎.js";
 import {
     el, LOGO_SVG, NCA_STORAGE_KEYS, Toast,
     cleanupAllEvents, clearPanelTimers,
-    获取主题, 应用主题, 切换主题,
+    获取主题, 应用主题, 切换主题, 安全存储读,
 } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
 import {
@@ -24,23 +22,33 @@ import {
     渲染输入区域, 发送消息流式,
 } from "./消息渲染器.js";
 import { 显示设置面板, 显示创建项目对话框 } from "./设置面板.js";
-import { 显示模板市场对话框 } from "./模板市场对话框.js";
-import { 构建优化面板, 构建可视化面板 } from "./插件开发面板.js";
-import { 显示打包对话框 } from "./插件打包对话框.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
-import { 创建登录面板 } from "./登录面板.js";
 import { t, 监听语言切换, 获取当前语言, 切换语言 } from "./i18n.js";
 
 // 语言切换监听器取消句柄（跨序于 renderSidebarUI 多次调用，需在重渲染前取消以避免重复注册）
 let _unsubLang = null;
 
+// 可视化引擎“销毁图”函数的懒加载占位（首次切换离开可视化标签时按需导入）
+let 销毁图 = null;
+
 
 // ─── 登录界面 overlay（默认入口 + 星星按钮入口） ────────────────
-function 显示登录弹窗(rootContainer, opts) {
+async function 显示登录弹窗(rootContainer, opts) {
     const asEntry = opts && opts.asEntry === true;
+    const skipIfLoggedIn = opts && opts.skipIfLoggedIn === true;
     // 若已存在登录 overlay，不重复创建
     const existed = rootContainer.querySelector(".nca-login-entry-overlay");
     if (existed) return;
+
+    // 动态导入登录模块（提前导入以便检查登录状态）
+    const { 创建登录面板, 获取登录状态, 自动登录 } = await import("./登录面板.js");
+
+    // 入口模式且要求跳过已登录：检查登录状态并尝试自动登录
+    // 已登录（内存中有 token+user）直接跳过；否则尝试从 RanKing 存储引导凭证并验证
+    if (asEntry && skipIfLoggedIn) {
+        if (获取登录状态().loggedIn) return;
+        if (await 自动登录().catch(() => false)) return;
+    }
 
     // 与设置面板一致：全屏 overlay + nca-panel
     const overlay = el("div", { class: "nca-overlay nca-login-entry-overlay" });
@@ -61,12 +69,13 @@ function 显示登录弹窗(rootContainer, opts) {
 
     // 当作为入口时，传入"进入"回调，供登录面板替换退出登录按钮为"进入 →"
     const onEnter = asEntry ? function() { overlay.remove(); } : null;
-    创建登录面板(centerWrap, { onEnter: onEnter });
     body.appendChild(centerWrap);
     panel.appendChild(body);
 
     overlay.appendChild(panel);
     rootContainer.appendChild(overlay);
+
+    创建登录面板(centerWrap, { onEnter: onEnter });
 }
 
 // ─── 主渲染函数 ────────────────────────────────
@@ -122,20 +131,28 @@ export function renderSidebarUI(container) {
     sidebarRoot.appendChild(panelOptimize);
     sidebarRoot.appendChild(panelVisualize);
 
-    // ─── 构建"优化插件"面板 ──────────────────────────────────
+    // ─── 构建"优化插件"面板（懒加载，首次切换时初始化）──────────────────
     const panelCtx = { 显示设置面板Fn: () => 显示设置面板(覆盖层容器, 更新状态栏) };
-    构建优化面板(panelOptimize, panelCtx);
-
-    // ─── 构建"功能可视化"面板 ────────────────────────────────
     let vizGraphInstance = null;
-    构建可视化面板(panelVisualize, () => vizGraphInstance, (v) => { vizGraphInstance = v; }, panelCtx);
+    let 优化面板已构建 = false;
+    let 可视化面板已构建 = false;
 
     // ─── 标签切换 ────────────────────────────────────────────
-    function switchTab(tabId) {
+    async function switchTab(tabId) {
         clearPanelTimers();
         if (vizGraphInstance && tabId !== 'visualize') {
-            销毁图(vizGraphInstance);
+            await 安全销毁图(vizGraphInstance);
             vizGraphInstance = null;
+        }
+        if (tabId === 'optimize' && !优化面板已构建) {
+            const { 构建优化面板 } = await import("./优化面板.js");
+            构建优化面板(panelOptimize, panelCtx);
+            优化面板已构建 = true;
+        }
+        if (tabId === 'visualize' && !可视化面板已构建) {
+            const { 构建可视化面板 } = await import("./可视化面板.js");
+            构建可视化面板(panelVisualize, () => vizGraphInstance, (v) => { vizGraphInstance = v; }, panelCtx);
+            可视化面板已构建 = true;
         }
         tabBar.querySelectorAll('.nc-tab').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tab === tabId);
@@ -145,6 +162,19 @@ export function renderSidebarUI(container) {
         });
         // 高频写入：异步落盘到 IndexedDB，不阻塞主线程；存储引擎同步刷新影子缓存以供同步读取
         存储.写入(NCA_STORAGE_KEYS.activeTab, tabId).catch(() => {});
+    }
+
+    async function 安全销毁图(instance) {
+        if (!instance) return;
+        if (typeof 销毁图 !== 'function') {
+            try {
+                const mod = await import("./可视化引擎.js");
+                销毁图 = mod.销毁图;
+            } catch (_) {}
+        }
+        if (typeof 销毁图 === 'function') {
+            try { 销毁图(instance); } catch (_) {}
+        }
     }
 
     // ─── 构建"开发插件"面板 ──────────────────────────────────
@@ -166,9 +196,10 @@ export function renderSidebarUI(container) {
         showCurrentSessionLabel: true,
         onCancelClick: () => 恢复欢迎页(),
         onNewClick: (newBtn) => 显示新建菜单(newBtn),
-        onPackageClick: (session) => {
+        onPackageClick: async (session) => {
             // 与旧逻辑保持一致：临时写入 localStorage 后唤起打包对话框
-            localStorage.setItem(NCA_STORAGE_KEYS.plugin, session.plugin_folder);
+            try { localStorage.setItem(NCA_STORAGE_KEYS.plugin, session.plugin_folder); } catch (_) {}
+            const { 显示打包对话框 } = await import("./插件打包对话框.js");
             显示打包对话框(覆盖层容器);
         },
     });
@@ -191,11 +222,11 @@ export function renderSidebarUI(container) {
     sidebarRoot.appendChild(refs.介绍页);
 
     // 恢复标签页（仅恢复历史选中状态，介绍页关闭后呈现对应工作区）
-    const savedTab = localStorage.getItem(NCA_STORAGE_KEYS.activeTab) || 'develop';
+    const savedTab = 安全存储读(NCA_STORAGE_KEYS.activeTab, 'develop');
     switchTab(savedTab);
 
-    // 默认显示登录界面作为入口（每次打开工具均先显示，无需持久化）
-    显示登录弹窗(sidebarRoot, { asEntry: true });
+    // 默认显示登录界面作为入口；已登录或可自动登录（RanKing 凭证有效）时跳过
+    显示登录弹窗(sidebarRoot, { asEntry: true, skipIfLoggedIn: true });
 
     绑定全局事件();
     初始化();
@@ -505,8 +536,9 @@ export function renderSidebarUI(container) {
         });
 
         const tplItem = el("div", { class: "nca-create-menu-item", text: t("project.from_template") });
-        tplItem.addEventListener("click", () => {
+        tplItem.addEventListener("click", async () => {
             backdrop.remove();
+            const { 显示模板市场对话框 } = await import("./模板市场对话框.js");
             显示模板市场对话框(覆盖层容器);
         });
 
@@ -547,7 +579,7 @@ export function renderSidebarUI(container) {
 
         const 本地下拉 = el("select", { class: "nca-model-select" });
         本地下拉.style.display = 状态.模型来源 === "local" ? "" : "none";
-        // 释放显存按钮：仅本地模式可见，调用 GraphQL 卸载模型 mutation 以释放本地模型占用的显存/内存
+        // 释放显存按钮：仅本地模式可见，调用 REST 卸载模型接口以释放本地模型占用的显存/内存
         const 释放显存按钮 = el("button", {
             class: "nca-unload-btn",
             text: "释放显存",
@@ -601,8 +633,8 @@ export function renderSidebarUI(container) {
             释放显存按钮.classList.add("loading");
             释放显存按钮.textContent = "释放中…";
             try {
-                const 结果 = await graphqlClient.mutate(UNLOAD_MODEL, {});
-                if (结果 && 结果.卸载模型 === true) {
+                const 结果 = await 请求("POST", "/unload-model", {});
+                if (结果 && 结果.success === true) {
                     释放显存按钮.textContent = "已释放";
                     try { Toast && Toast.success && Toast.success("已释放本地模型显存"); } catch (_) {}
                 } else {
@@ -653,8 +685,8 @@ export function renderSidebarUI(container) {
     // 注意：会话列表更新 / 会话切换 事件已由公共组件「会话列表面板」内部订阅并自动重渲染，此处不再重复处理列表渲染。
     // 仅保留消息渲染、状态栏与发送态等与会话视图协调器自身职责相关的全局事件。
     function 绑定全局事件() {
-        事件总线.on(事件.会话切换, () => { 更新状态栏("就绪"); });
-        事件总线.on(事件.消息列表更新, (messages) => 渲染所有消息(refs, messages));
+        事件总线.on(事件.会话切换, () => { /* 状态栏由 切换会话 内部更新为"加载会话..." */ });
+        事件总线.on(事件.消息列表更新, (messages) => { 渲染所有消息(refs, messages); 更新状态栏("就绪"); });
         事件总线.on(事件.新消息追加, (msg) => { 移除加载动画(refs); 追加消息DOM(refs, msg); });
         事件总线.on(事件.发送状态变更, (isSending) => { refs.输入框.disabled = isSending; refs.发送按钮.disabled = isSending; if (isSending && !refs.消息区域.querySelector('#nca-loader') && !refs.消息区域.querySelector('.nca-streaming-cursor')) 显示加载动画(refs); });
         事件总线.on(事件.状态栏更新, (text) => 更新状态栏(text));

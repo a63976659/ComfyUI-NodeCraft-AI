@@ -4,13 +4,14 @@
 // ═══════════════════════════════════════════════════════════════
 
 import {
-    el, 简易Markdown渲染, NCA_API_BASE, LOGO_SVG, NCA_STORAGE_KEYS, registerCleanup, Toast,
-    显示视觉能力警告, 移除视觉能力警告,
+    el, 简易Markdown渲染, 应用Prism高亮, LOGO_SVG, NCA_STORAGE_KEYS, registerCleanup, Toast,
+    显示视觉能力警告, 移除视觉能力警告, 安全存储读,
 } from "./工具函数.js";
 import {
     事件总线, 事件, 状态,
     发送消息, 创建会话, 获取当前模型名称, 格式化时间,
 } from "./交互与状态.js";
+import { 创建流式聊天 } from "./流式聊天管理器.js";
 import { t } from "./i18n.js";
 
 // ─── 流式响应状态 ────────────────────────────────────────────
@@ -23,6 +24,35 @@ let _isStreaming = false;
 // 渲染入口（渲染所有消息 / 渲染输入区域）处缓存，避免给每个消息节点再绑一份引用。
 let _当前refs = null;
 let _当前rootContainer = null;
+
+// DOMPurify 加载完成/失败后重新渲染标记为待消毒的消息（安全纯文本降级→完整 Markdown 渲染）
+// 仅处理已完成的静态消息；流式渲染中的消息不带 data-pending-sanitize 标记，不受影响
+// ready 事件：DOMPurify 加载成功，简易Markdown渲染 走 DOMPurify 消毒路径
+// failed 事件：DOMPurify 加载失败，简易Markdown渲染 走 _本地消毒 路径（DOMParser 白名单）
+function _重渲染待处理消息() {
+    if (!_当前refs || !_当前refs.消息区域) return;
+    const 待处理 = _当前refs.消息区域.querySelectorAll('[data-pending-sanitize="true"]');
+    if (待处理.length === 0) return;
+    待处理.forEach(body => {
+        const msgEl = body.closest('.nca-msg');
+        if (!msgEl) return;
+        // 优先使用元素上缓存的原始内容（流式完成消息），其次通过消息索引从列表获取
+        let rawContent = msgEl._pendingContent;
+        if (rawContent === undefined && typeof msgEl._消息索引 === 'number') {
+            const msg = 状态.当前消息列表[msgEl._消息索引];
+            if (msg) rawContent = msg.content;
+        }
+        if (rawContent !== undefined) {
+            body.innerHTML = 简易Markdown渲染(rawContent);
+            body.removeAttribute('data-pending-sanitize');
+            delete msgEl._pendingContent;
+            绑定代码块复制按钮(msgEl);
+        }
+    });
+}
+
+window.addEventListener('nca-dompurify-ready', _重渲染待处理消息);
+window.addEventListener('nca-dompurify-failed', _重渲染待处理消息);
 
 // ═══════════════════════════════════════════════════════════════
 // 虚拟滚动（消息列表性能优化）
@@ -237,9 +267,14 @@ function _创建消息DOM(msg, index) {
         headerChildren.push(editBtn);
     }
 
+    const msgBody = el("div", { class: "nca-msg-body", html: 简易Markdown渲染(msg.content) });
+    // DOMPurify 未就绪时标记，待加载完成后由事件监听器重新渲染
+    if (!window.DOMPurify) {
+        msgBody.dataset.pendingSanitize = "true";
+    }
     const msgEl = el("div", { class: `nca-msg ${msg.role}` }, [
         el("div", { class: "nca-msg-header" }, headerChildren),
-        el("div", { class: "nca-msg-body", html: 简易Markdown渲染(msg.content) }),
+        msgBody,
     ]);
     // 缓存索引：编辑回调与虚拟滚动测量都会读取
     msgEl._消息索引 = index;
@@ -288,7 +323,7 @@ function _进入编辑模式(msgEl, msg, index) {
     cancelBtn.addEventListener("click", () => {
         msgEl.classList.remove("nca-msg-editing");
         body.innerHTML = originalHTML;
-        _绑定代码块复制(msgEl);
+        绑定代码块复制按钮(msgEl);
     });
 
     confirmBtn.addEventListener("click", () => {
@@ -305,7 +340,7 @@ function _进入编辑模式(msgEl, msg, index) {
         if (!refs) {
             // 异常兜底：还原内容，避免气泡留空
             body.innerHTML = originalHTML;
-            _绑定代码块复制(msgEl);
+            绑定代码块复制按钮(msgEl);
             return;
         }
 
@@ -326,8 +361,8 @@ function _进入编辑模式(msgEl, msg, index) {
     });
 }
 
-function _绑定代码块复制(msgEl) {
-    msgEl.querySelectorAll(".nca-code-copy").forEach(btn => {
+export function 绑定代码块复制按钮(containerEl) {
+    containerEl.querySelectorAll(".nca-code-copy").forEach(btn => {
         registerCleanup(btn, "click", () => {
             const pre = btn.closest("pre");
             const code = pre?.querySelector("code")?.textContent || "";
@@ -341,6 +376,8 @@ function _绑定代码块复制(msgEl) {
             });
         });
     });
+    // 应用 Prism 语法高亮（异步，不阻塞渲染）
+    应用Prism高亮(containerEl);
 }
 
 function _尝试启用虚拟滚动(refs) {
@@ -348,7 +385,7 @@ function _尝试启用虚拟滚动(refs) {
     const list = 状态.当前消息列表;
     if (!list || list.length < 虚拟滚动配置.启用阈值) return;
     refs._虚拟滚动 = new 虚拟滚动管理器(
-        refs.消息区域, list, _创建消息DOM, _绑定代码块复制,
+        refs.消息区域, list, _创建消息DOM, 绑定代码块复制按钮,
     );
     refs.消息区域.scrollTop = refs.消息区域.scrollHeight;
 }
@@ -409,7 +446,7 @@ export function 渲染所有消息(refs, messages) {
     // 大消息列表：启用虚拟滚动
     if (messages.length >= 虚拟滚动配置.启用阈值) {
         refs._虚拟滚动 = new 虚拟滚动管理器(
-            refs.消息区域, messages, _创建消息DOM, _绑定代码块复制,
+            refs.消息区域, messages, _创建消息DOM, 绑定代码块复制按钮,
         );
         滚动到底部(refs);
         return;
@@ -438,7 +475,7 @@ export function 追加消息DOM(refs, msg, index) {
         : Math.max(0, 状态.当前消息列表.length - 1);
     const msgEl = _创建消息DOM(msg, 索引);
     refs.消息区域.appendChild(msgEl);
-    _绑定代码块复制(msgEl);
+    绑定代码块复制按钮(msgEl);
 
     滚动到底部(refs);
 
@@ -553,119 +590,92 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
 
     // 4. 开始流式请求
     _abortController = new AbortController();
-    let fullContent = '';
-    let buffer = '';
     let hasError = false;
+    let _toolExecutingEl = null; // 工具执行状态指示器元素（闭包共享）
 
-    try {
-        const requestBody = {
-            message: text,
-            session_id: 状态.当前会话ID,
-            model_source: 状态.模型来源,
-            local_model_name: 状态.选中本地模型 || "",
-            plugin_context: localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "",
-            activeTab: localStorage.getItem(NCA_STORAGE_KEYS.activeTab) || "develop",
-        };
-        if (attachments.length > 0) {
-            requestBody.attachments = attachments;
-        }
-        // 编辑重生成：负载 truncate_at，服务端据此裁剪历史后以 message 作为新的末位输入
-        if (truncate_at !== undefined && truncate_at !== null) {
-            requestBody.truncate_at = truncate_at;
-        }
-
-        const response = await fetch(`${NCA_API_BASE}/chat-stream`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-            signal: _abortController.signal,
-        });
-
-        if (!response.ok) {
-            let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-            try {
-                const errData = await response.json();
-                if (errData.error) errorMsg = errData.error;
-            } catch (_) {}
-            throw new Error(errorMsg);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // 保留不完整的行
-
-            for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                try {
-                    const data = JSON.parse(line.slice(6));
-                    if (data.error) {
-                        hasError = true;
-                        fullContent += `\n⚠ 错误: ${data.error}`;
-                        break;
-                    }
-                    if (data.done) break;
-                    if (data.content) {
-                        fullContent += data.content;
-                        // 实时更新 AI 消息气泡内容（Markdown 渲染 + 光标）
-                        aiBody.innerHTML = 简易Markdown渲染(fullContent) + '<span class="nca-streaming-cursor"></span>';
-                        滚动到底部(refs);
-                    }
-                } catch (parseErr) {
-                    // 跳过无法解析的行
-                    console.warn("[节点梦工厂] SSE 解析警告:", parseErr.message);
-                }
+    await 创建流式聊天({
+        消息容器: aiBubble,
+        消息体: aiBody,
+        滚动容器: refs.消息区域,
+        请求体: (() => {
+            const requestBody = {
+                message: text,
+                session_id: 状态.当前会话ID,
+                model_source: 状态.模型来源,
+                local_model_name: 状态.选中本地模型 || "",
+                plugin_context: 安全存储读(NCA_STORAGE_KEYS.plugin),
+                activeTab: 安全存储读(NCA_STORAGE_KEYS.activeTab, "develop"),
+            };
+            if (attachments.length > 0) requestBody.attachments = attachments;
+            // 编辑重生成：负载 truncate_at，服务端据此裁剪历史后以 message 作为新的末位输入
+            if (truncate_at !== undefined && truncate_at !== null) {
+                requestBody.truncate_at = truncate_at;
             }
-            if (hasError) break;
-        }
-    } catch (e) {
-        if (e.name === 'AbortError') {
-            fullContent += "\n\n_（生成已停止）_";
-        } else {
-            hasError = true;
-            fullContent = fullContent || `⚠ 请求失败: ${e.message}`;
-        }
-    }
-
-    // 5. 完成：移除光标，恢复按钮
-    aiBody.innerHTML = 简易Markdown渲染(fullContent || "（无回复）");
-
-    // 绑定代码块复制按钮（通过 registerCleanup 注册以避免内存泄漏）
-    aiBubble.querySelectorAll(".nca-code-copy").forEach(btn => {
-        registerCleanup(btn, "click", () => {
-            const pre = btn.closest("pre");
-            const code = pre?.querySelector("code")?.textContent || "";
-            navigator.clipboard.writeText(code).then(() => {
-                btn.classList.add("copied");
-                btn.textContent = t("common.copied");
-                setTimeout(() => {
-                    btn.classList.remove("copied");
-                    btn.textContent = t("common.copy");
-                }, 1500);
-            });
-        });
+            return requestBody;
+        })(),
+        中止信号: _abortController.signal,
+        数据处理: (data, 状态引用) => {
+            // ── 上下文健康度指标 - 不渲染为聊天消息 ──
+            if (data.type === 'context_health') {
+                事件总线.emit('context-health-updated', data);
+                if (data.warning) {
+                    if (data.usage_percent >= 95) {
+                        Toast.error(`上下文已满 (${data.usage_percent}%)，建议新建会话以获得最佳体验`);
+                    } else if (data.usage_percent >= 85) {
+                        Toast.warning(`上下文使用率较高 (${data.usage_percent}%)，复杂任务建议新建会话`);
+                    }
+                }
+                return 'skip';
+            }
+            // ── 工具执行状态消息 ──
+            if (data.type === 'tool_executing') {
+                const toolMatch = (data.content || '').match(/\[正在执行:\s*(.+?)\.{3}\]/);
+                const toolName = toolMatch ? toolMatch[1] : '工具';
+                if (!状态引用.el) {
+                    状态引用.el = document.createElement('div');
+                    状态引用.el.className = 'nca-tool-executing';
+                    aiBody.appendChild(状态引用.el);
+                }
+                状态引用.el.innerHTML = '<span class="tool-exec-icon">⚙️</span> 正在执行 <code></code><span class="tool-exec-dots"></span>';
+                状态引用.el.querySelector('code').textContent = toolName;
+                事件总线.emit(事件.状态栏更新, `执行工具: ${toolName}...`);
+                滚动到底部(refs);
+                return 'skip';
+            }
+            // 收到正常文本时，移除工具执行指示器
+            if (data.content) {
+                if (状态引用.el) {
+                    状态引用.el.remove();
+                    状态引用.el = null;
+                }
+                _toolExecutingEl = 状态引用.el; // 同步到外部
+                // 过滤内容中的 [正在执行: xxx...] 格式文本
+                data.content = data.content.replace(/\n?\[正在执行:\s*.+?\.{3}\]\n?/g, '');
+                事件总线.emit(事件.状态栏更新, "生成中...");
+            }
+        },
+        完成回调: ({ fullContent, hasError: err, isAbort }) => {
+            hasError = err;
+            const 内容 = fullContent || "（无回复）";
+            aiBody.innerHTML = 简易Markdown渲染(内容);
+            if (!window.DOMPurify) {
+                aiBody.dataset.pendingSanitize = "true";
+                aiBubble._pendingContent = 内容;
+            }
+            绑定代码块复制按钮(aiBubble);
+            // 记录到消息列表
+            状态.当前消息列表.push({ role: "assistant", content: 内容, timestamp: Date.now() });
+            // 虚拟滚动启用时：移除流式临时气泡，让滚动器接管渲染
+            if (refs._虚拟滚动) {
+                if (aiBubble.parentNode) aiBubble.parentNode.removeChild(aiBubble);
+                refs._虚拟滚动.追加新消息();
+            } else {
+                _尝试启用虚拟滚动(refs);
+            }
+        },
     });
 
-    // 记录到消息列表
-    const AI回复 = { role: "assistant", content: fullContent || "（无回复）", timestamp: Date.now() };
-    状态.当前消息列表.push(AI回复);
-
-    // 虚拟滚动启用时：移除流式临时气泡，让滚动器接管渲染，避免重复显示
-    if (refs._虚拟滚动) {
-        if (aiBubble.parentNode) aiBubble.parentNode.removeChild(aiBubble);
-        refs._虚拟滚动.追加新消息();
-    } else {
-        // 未启用虚拟滚动时检查是否达到阈值，适时升级
-        _尝试启用虚拟滚动(refs);
-    }
-
-    // 恢复状态
+    // 5. 恢复状态
     _isStreaming = false;
     _abortController = null;
     状态.正在发送 = false;
@@ -810,7 +820,7 @@ function 移除附件(index, refs) {
     }
 }
 
-export function 渲染附件预览(refs) {
+function 渲染附件预览(refs) {
     const container = refs.附件预览区;
     if (!container) return;
     container.innerHTML = "";

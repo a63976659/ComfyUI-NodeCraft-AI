@@ -1,16 +1,17 @@
 // ═══════════════════════════════════════════════════════════════
 // GitHub同步对话框.js — 同步当前插件到 GitHub 仓库
 // NodeCraft AI — Luxury Terminal / Neo-Noir Hacker
+// ──── 注意：`显示GitHub同步对话框` 当前无 UI 入口调用，调用链未接入 ────
 // ═══════════════════════════════════════════════════════════════
 
-import { NCA_STORAGE_KEYS, Toast } from "./工具函数.js";
+import { NCA_STORAGE_KEYS, Toast, 安全存储读 } from "./工具函数.js";
 
 /**
  * 显示“GitHub 同步上传”对话框
  * @param {HTMLElement} rootContainer - 根容器引用（保留参数以兼容调用方）
  */
 export async function 显示GitHub同步对话框(rootContainer) {
-    const selectedPlugin = localStorage.getItem(NCA_STORAGE_KEYS.plugin);
+    const selectedPlugin = 安全存储读(NCA_STORAGE_KEYS.plugin);
     if (!selectedPlugin) {
         Toast.warning("请先选择要同步的项目");
         return;

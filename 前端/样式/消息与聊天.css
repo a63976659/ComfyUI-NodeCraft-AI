@@ -61,6 +61,19 @@
     line-height: 1.7;
 }
 
+/* ─── 通用空状态提示 ───────────────────────────────────────── */
+.nca-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: var(--nca-fg-muted);
+    font-size: 13px;
+    text-align: center;
+    gap: 8px;
+}
+
 .nca-quick-actions {
     display: flex;
     flex-direction: column;
@@ -169,8 +182,166 @@
 }
 
 /* ─── Markdown 渲染 ────────────────────────────────────────── */
-.nca-msg-body p { margin: 0 0 var(--nca-space-sm); }
-.nca-msg-body p:last-child { margin-bottom: 0; }
+.nca-msg-body p, .nca-msg-content p { margin: 0 0 var(--nca-space-sm); }
+.nca-msg-body p:last-child, .nca-msg-content p:last-child { margin-bottom: 0; }
+
+/* ─── Markdown 标题 h1-h6 ──────────────────────────────────── */
+.nca-msg-body h1, .nca-msg-content h1,
+.nca-msg-body h2, .nca-msg-content h2,
+.nca-msg-body h3, .nca-msg-content h3,
+.nca-msg-body h4, .nca-msg-content h4,
+.nca-msg-body h5, .nca-msg-content h5,
+.nca-msg-body h6, .nca-msg-content h6 {
+    margin: var(--nca-space-lg) 0 var(--nca-space-sm);
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--nca-fg);
+}
+
+.nca-msg-body h1:first-child, .nca-msg-content h1:first-child,
+.nca-msg-body h2:first-child, .nca-msg-content h2:first-child,
+.nca-msg-body h3:first-child, .nca-msg-content h3:first-child,
+.nca-msg-body h4:first-child, .nca-msg-content h4:first-child,
+.nca-msg-body h5:first-child, .nca-msg-content h5:first-child,
+.nca-msg-body h6:first-child, .nca-msg-content h6:first-child {
+    margin-top: 0;
+}
+
+/* h1：最大标题，底部细线 + 强调色 */
+.nca-msg-body h1, .nca-msg-content h1 {
+    font-size: 1.5em;
+    padding-bottom: var(--nca-space-xs);
+    border-bottom: 1px solid var(--nca-border-hover);
+    color: var(--nca-accent);
+}
+
+/* h2：次级标题，更淡的底线 */
+.nca-msg-body h2, .nca-msg-content h2 {
+    font-size: 1.35em;
+    padding-bottom: var(--nca-space-2xs);
+    border-bottom: 1px solid var(--nca-border);
+    color: var(--nca-accent);
+}
+
+.nca-msg-body h3, .nca-msg-content h3 { font-size: 1.2em; }
+.nca-msg-body h4, .nca-msg-content h4 { font-size: 1.1em; }
+.nca-msg-body h5, .nca-msg-content h5 { font-size: 1em; color: var(--nca-fg-dim); }
+.nca-msg-body h6, .nca-msg-content h6 {
+    font-size: 0.9em;
+    color: var(--nca-fg-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ─── Markdown 引用块 blockquote ──────────────────────────── */
+.nca-msg-body blockquote, .nca-msg-content blockquote {
+    margin: var(--nca-space-sm) 0;
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-left: 3px solid var(--nca-accent);
+    background: var(--nca-accent-dim);
+    border-radius: 0 var(--nca-radius-sm) var(--nca-radius-sm) 0;
+    color: var(--nca-fg-dim);
+    font-style: italic;
+}
+
+.nca-msg-body blockquote p, .nca-msg-content blockquote p { margin: var(--nca-space-2xs) 0; }
+.nca-msg-body blockquote p:last-child, .nca-msg-content blockquote p:last-child { margin-bottom: 0; }
+
+/* ─── Markdown 表格 table ─────────────────────────────────── */
+.nca-msg-body table, .nca-msg-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--nca-space-sm) 0;
+    font-size: 12px;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* 表头背景略深 */
+.nca-msg-body thead, .nca-msg-content thead { background: var(--nca-bg-tertiary); }
+
+.nca-msg-body th, .nca-msg-content th {
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    text-align: left;
+    font-weight: 600;
+    color: var(--nca-accent);
+    border: 1px solid var(--nca-border-hover);
+    white-space: nowrap;
+}
+
+.nca-msg-body td, .nca-msg-content td {
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    border: 1px solid var(--nca-border);
+    color: var(--nca-fg);
+}
+
+/* 斑马纹 + hover 高亮 */
+.nca-msg-body tbody tr:nth-child(even), .nca-msg-content tbody tr:nth-child(even) { background: var(--nca-hover-overlay); }
+.nca-msg-body tbody tr:hover, .nca-msg-content tbody tr:hover { background: var(--nca-accent-dim); }
+
+/* ─── Markdown 列表 ul/ol/li ──────────────────────────────── */
+.nca-msg-body ul, .nca-msg-content ul,
+.nca-msg-body ol, .nca-msg-content ol {
+    margin: var(--nca-space-sm) 0;
+    padding-left: var(--nca-space-xl);
+}
+
+.nca-msg-body li, .nca-msg-content li { margin: var(--nca-space-xs) 0; }
+
+/* 列表标记用强调色 */
+.nca-msg-body ul > li::marker, .nca-msg-content ul > li::marker { color: var(--nca-accent); }
+.nca-msg-body ol > li::marker, .nca-msg-content ol > li::marker { color: var(--nca-purple); }
+
+/* 嵌套列表间距收紧 */
+.nca-msg-body li > ul, .nca-msg-content li > ul,
+.nca-msg-body li > ol, .nca-msg-content li > ol { margin: var(--nca-space-xs) 0; }
+
+/* ─── Markdown 链接 a ─────────────────────────────────────── */
+.nca-msg-body a, .nca-msg-content a {
+    color: var(--nca-accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: color var(--nca-transition-fast), border-color var(--nca-transition-fast);
+}
+
+.nca-msg-body a:hover, .nca-msg-content a:hover {
+    border-bottom-color: var(--nca-accent);
+    text-shadow: 0 0 var(--nca-space-xs) var(--nca-accent-glow);
+}
+
+.nca-msg-body a:visited, .nca-msg-content a:visited { color: var(--nca-purple); }
+
+/* ─── Markdown 图片 img ───────────────────────────────────── */
+.nca-msg-body img, .nca-msg-content img {
+    max-width: 100%;
+    border-radius: var(--nca-radius);
+    border: 1px solid var(--nca-border);
+    margin: var(--nca-space-sm) 0;
+}
+
+/* ─── Markdown 水平线 hr ──────────────────────────────────── */
+.nca-msg-body hr, .nca-msg-content hr {
+    border: none;
+    border-top: 1px solid var(--nca-border-hover);
+    margin: var(--nca-space-lg) 0;
+}
+
+/* ─── Markdown 强调 strong/em/del ─────────────────────────── */
+.nca-msg-body strong, .nca-msg-content strong,
+.nca-msg-body b, .nca-msg-content b {
+    font-weight: 700;
+    color: var(--nca-fg);
+}
+
+.nca-msg-body em, .nca-msg-content em,
+.nca-msg-body i, .nca-msg-content i { font-style: italic; }
+
+.nca-msg-body del, .nca-msg-content del,
+.nca-msg-body s, .nca-msg-content s {
+    color: var(--nca-fg-muted);
+    text-decoration: line-through;
+}
 
 .nca-msg-body code {
     background: var(--nca-bg-code);
@@ -271,6 +442,56 @@
 .nca-loading-dot:nth-child(1) { animation-delay: 0s; }
 .nca-loading-dot:nth-child(2) { animation-delay: 0.2s; }
 .nca-loading-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ═══════════════════════════════════════════════════════════════
+   工具执行状态指示器
+   ═══════════════════════════════════════════════════════════════ */
+
+.nca-tool-executing {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    margin: var(--nca-space-sm) 0;
+    background: var(--nca-hover-overlay);
+    border: 1px solid var(--nca-border);
+    border-left: 2px solid var(--nca-warning);
+    border-radius: var(--nca-radius-sm);
+    font-size: 12px;
+    font-style: italic;
+    color: var(--nca-fg-dim);
+    font-family: var(--nca-font-mono);
+    animation: nca-fade-in var(--nca-transition-fast) ease;
+}
+
+.nca-tool-executing code {
+    background: var(--nca-bg-code);
+    padding: var(--nca-space-2xs) var(--nca-space-xs);
+    border-radius: var(--nca-radius-sm);
+    font-size: 11px;
+    color: var(--nca-accent);
+    border: 1px solid var(--nca-border);
+    font-style: normal;
+}
+
+.nca-tool-executing .tool-exec-icon {
+    font-style: normal;
+    font-size: 14px;
+    animation: nca-viz-spin 2s linear infinite;
+    display: inline-block;
+}
+
+.nca-tool-executing .tool-exec-dots::after {
+    content: '';
+    animation: nca-tool-dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes nca-tool-dots {
+    0% { content: ''; }
+    25% { content: '.'; }
+    50% { content: '..'; }
+    75% { content: '...'; }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    流式响应样式
@@ -468,4 +689,56 @@
 .nca-edit-cancel:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--nca-accent-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Diff 预览渲染（增量编辑结果展示）
+   ═══════════════════════════════════════════════════════════════ */
+
+/* diff 代码块容器：覆盖默认 code padding，改为逐行 padding */
+.nca-msg-body pre code.nca-diff-block {
+    padding: var(--nca-space-3xl) 0 var(--nca-space-sm) 0;
+}
+
+/* 每行 diff span 为块级元素，保持等宽对齐 */
+.nca-diff-block span {
+    display: block;
+    padding: 0 var(--nca-space-lg);
+    white-space: pre;
+    line-height: 1.6;
+}
+
+/* 新增行：绿色背景 */
+.nca-diff-add {
+    background: rgba(46, 160, 67, 0.12);
+    border-left: 2px solid rgba(46, 160, 67, 0.6);
+    color: #7ee787;
+}
+
+/* 删除行：红色背景 */
+.nca-diff-del {
+    background: rgba(248, 81, 73, 0.12);
+    border-left: 2px solid rgba(248, 81, 73, 0.6);
+    color: #ffa198;
+}
+
+/* 上下文行：暗色 */
+.nca-diff-ctx {
+    color: var(--nca-fg-dim);
+}
+
+/* hunk 头行（@@ ... @@）：强调色 */
+.nca-diff-hunk {
+    background: var(--nca-hover-overlay);
+    color: var(--nca-accent);
+    border-top: 1px solid var(--nca-border);
+    border-bottom: 1px solid var(--nca-border);
+    margin: var(--nca-space-xs) 0;
+}
+
+/* 文件头行（--- a/... +++ b/...）：灰色斜体 */
+.nca-diff-meta {
+    color: var(--nca-fg-muted);
+    font-style: italic;
+    padding-bottom: var(--nca-space-xs);
 }

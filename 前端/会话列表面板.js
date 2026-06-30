@@ -9,7 +9,7 @@
 //   - 仅 type==='develop' 显示"删除会话和文件夹"双选项，其他类型仅普通删除。
 // ═══════════════════════════════════════════════════════════════
 
-import { el, Toast, NCA_STORAGE_KEYS } from "./工具函数.js";
+import { el, Toast, NCA_STORAGE_KEYS, 安全存储读 } from "./工具函数.js";
 import { t } from "./i18n.js";
 import {
     获取会话列表, 创建会话, 删除会话, 更新会话标题, 格式化时间,
@@ -191,8 +191,8 @@ export function 创建会话列表面板(options = {}) {
         if (显示列表.length === 0) {
             const 提示文案 = 内部.关键词
                 ? (t("session.no_match") || "— 无匹配 —")
-                : (t("session.empty") || "— 暂无会话 —");
-            列表容器.appendChild(el("div", { class: "nca-session-empty", text: 提示文案 }));
+                : (t("session.empty") || "暂无会话，点击 ＋ 新建开始对话");
+            列表容器.appendChild(el("div", { class: "nca-session-empty nca-empty-state", text: 提示文案 }));
             return;
         }
         显示列表.forEach(session => {
@@ -286,7 +286,7 @@ export function 创建会话列表面板(options = {}) {
     async function _新建会话() {
         // optimize / visualize 类型：必须先选择插件文件夹才能新建
         if (type === "optimize" || type === "visualize") {
-            const 选中文件夹 = (localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "").trim();
+            const 选中文件夹 = 安全存储读(NCA_STORAGE_KEYS.plugin).trim();
             if (!选中文件夹) {
                 Toast.warning("请先选择插件文件夹");
                 return;
@@ -473,6 +473,19 @@ export function 创建会话列表面板(options = {}) {
         return (_获取列表() || []).find(s => s.id === id) || null;
     }
 
+    // 外部设置当前会话 ID（不触发 onSessionSwitch，仅同步 UI 高亮状态）
+    function setCurrentSessionId(sessionId) {
+        if (useGlobalState) {
+            const session = (_获取列表() || []).find(s => s.id === sessionId);
+            if (session) {
+                try { 切换全局会话(sessionId); } catch (_) {}
+            }
+        } else {
+            内部.当前会话ID = sessionId || null;
+        }
+        渲染();
+    }
+
     function clearSelection() {
         if (useGlobalState) return; // 全局状态由调用方通过 onCancelClick 自行处理
         内部.当前会话ID = null;
@@ -506,5 +519,5 @@ export function 创建会话列表面板(options = {}) {
         refresh();
     }
 
-    return { refresh, getCurrentSessionId, getCurrentSession, clearSelection, isCollapsed, destroy };
+    return { refresh, getCurrentSessionId, getCurrentSession, setCurrentSessionId, clearSelection, isCollapsed, destroy };
 }

@@ -3,14 +3,14 @@
 // NodeCraft AI — Luxury Terminal / Neo-Noir Hacker
 // ═══════════════════════════════════════════════════════════════
 
-import { NCA_STORAGE_KEYS, Toast } from "./工具函数.js";
+import { NCA_STORAGE_KEYS, Toast, 安全存储读 } from "./工具函数.js";
 
 /**
  * 显示“插件打包导出”对话框
  * @param {HTMLElement} rootContainer - 根容器引用（保留参数以兼容调用方）
  */
 export async function 显示打包对话框(rootContainer) {
-    const selectedPlugin = localStorage.getItem(NCA_STORAGE_KEYS.plugin);
+    const selectedPlugin = 安全存储读(NCA_STORAGE_KEYS.plugin);
     if (!selectedPlugin) {
         Toast.warning("请先选择要打包的项目");
         return;

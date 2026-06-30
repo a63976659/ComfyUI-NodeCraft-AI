@@ -12,12 +12,9 @@
 @import url('./样式/输入与附件.css');
 @import url('./样式/面板与对话框.css');
 @import url('./样式/状态栏与底部.css');
-@import url('./样式/关于页面.css');
-@import url('./样式/文件夹选择器.css');
-@import url('./样式/可视化面板.css');
-@import url('./样式/GitHub同步.css');
-@import url('./样式/监控与警告.css');
-@import url('./样式/登录面板.css');
+
 @import url('./样式/Toast通知.css');
 @import url('./样式/文件编辑器.css');
+@import url('./样式/代码审查面板.css');
+@import url('./样式/代码补全.css');
 @import url('./样式/响应式设计.css');

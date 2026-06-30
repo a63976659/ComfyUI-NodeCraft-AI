@@ -3,7 +3,7 @@
 // NodeCraft AI — Luxury Terminal / Neo-Noir Hacker
 // ═══════════════════════════════════════════════════════════════
 
-import { el, Toast } from "./工具函数.js";
+import { el, Toast, _转义HTML } from "./工具函数.js";
 import { NCA_STORAGE_KEYS } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
 import {
@@ -17,6 +17,127 @@ function _formatCount(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
     return String(n);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 文件夹浏览器对话框（基于 browse-folder 端点，浏览器环境可用）
+// ═══════════════════════════════════════════════════════════════
+
+function 显示文件夹浏览器(rootContainer, 初始路径, onSelect) {
+    const overlay = el("div", { class: "nca-overlay center-modal" });
+    const modal = el("div", { class: "nca-modal", style: { maxWidth: "480px" } });
+
+    const closeBtn = el("button", { class: "nca-icon-btn", text: "✕" });
+    const 关闭 = () => overlay.remove();
+    closeBtn.addEventListener("click", 关闭);
+
+    modal.appendChild(el("div", { class: "nca-modal-header" }, [
+        el("h3", { text: "📂 选择文件夹" }),
+        closeBtn,
+    ]));
+
+    const body = el("div", { class: "nca-modal-body" });
+
+    // 路径栏：上级按钮 + 当前路径显示
+    const 上级按钮 = el("button", { class: "nca-btn nca-btn-sm", text: "↑", title: "上级目录" });
+    const 当前路径 = el("div", {
+        style: {
+            flex: "1", fontSize: "11px", fontFamily: "var(--nca-font-mono)",
+            color: "var(--nca-fg-dim)", overflow: "hidden", textOverflow: "ellipsis",
+            whiteSpace: "nowrap", padding: "4px 8px", background: "var(--nca-bg-primary)",
+            border: "1px solid var(--nca-border)", borderRadius: "var(--nca-radius-sm)",
+        }
+    });
+    body.appendChild(el("div", { style: { display: "flex", gap: "6px", marginBottom: "8px", alignItems: "center" } }, [
+        上级按钮, 当前路径,
+    ]));
+
+    // 文件夹列表
+    const 列表 = el("div", {
+        style: {
+            maxHeight: "300px", overflowY: "auto",
+            border: "1px solid var(--nca-border)", borderRadius: "var(--nca-radius-sm)",
+        }
+    });
+    body.appendChild(列表);
+
+    // 操作按钮
+    const 取消按钮 = el("button", { class: "nca-btn nca-btn-sm", text: "取消" });
+    取消按钮.addEventListener("click", 关闭);
+    const 确认按钮 = el("button", { class: "nca-btn nca-btn-primary", text: "选择此目录" });
+    body.appendChild(el("div", { style: { display: "flex", gap: "8px", marginTop: "12px", justifyContent: "flex-end" } }, [
+        取消按钮, 确认按钮,
+    ]));
+
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) 关闭(); });
+
+    let _当前目录 = "";
+
+    async function 加载目录(path) {
+        列表.innerHTML = '<div style="color:#6b7280; padding:16px; text-align:center; font-size:11px;">加载中...</div>';
+        确认按钮.disabled = true;
+        try {
+            const headers = { "Content-Type": "application/json" };
+            try {
+                const token = localStorage.getItem("ComfyCommunity_Token") || sessionStorage.getItem("ComfyCommunity_Token");
+                if (token) headers["Authorization"] = `Bearer ${token}`;
+            } catch (_) {}
+            const resp = await fetch("/ai-coder/browse-folder", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ initial_dir: path || "" }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok && data && data.status === "success") {
+                _当前目录 = data.current_dir || "";
+                当前路径.textContent = _当前目录;
+                const folders = data.folders || [];
+                列表.innerHTML = "";
+                if (folders.length === 0) {
+                    列表.innerHTML = '<div style="color:#6b7280; padding:16px; text-align:center; font-size:11px;">没有子文件夹</div>';
+                } else {
+                    folders.forEach(f => {
+                        const item = el("div", {
+                            text: "📁 " + f.name,
+                            style: {
+                                padding: "6px 12px", cursor: "pointer", fontSize: "12px",
+                                borderBottom: "1px solid rgba(255,255,255,0.05)",
+                                transition: "background 0.15s",
+                            }
+                        });
+                        item.addEventListener("mouseenter", () => { item.style.background = "rgba(0,212,255,0.08)"; });
+                        item.addEventListener("mouseleave", () => { item.style.background = ""; });
+                        item.addEventListener("click", () => 加载目录(f.path));
+                        列表.appendChild(item);
+                    });
+                }
+                确认按钮.disabled = false;
+            } else {
+                列表.innerHTML = `<div style="color:#ef4444; padding:16px; text-align:center; font-size:11px;">${_转义HTML((data && data.error) || "加载失败")}</div>`;
+            }
+        } catch (e) {
+            列表.innerHTML = `<div style="color:#ef4444; padding:16px; text-align:center; font-size:11px;">网络错误: ${_转义HTML(e.message || String(e))}</div>`;
+        }
+    }
+
+    上级按钮.addEventListener("click", () => {
+        if (!_当前目录) return;
+        const trimmed = _当前目录.replace(/[\\/]+$/, "");
+        const parent = trimmed.replace(/[\\/][^\\/]*$/, "");
+        if (parent && parent !== trimmed) 加载目录(parent);
+    });
+
+    确认按钮.addEventListener("click", () => {
+        if (_当前目录) {
+            onSelect(_当前目录);
+            关闭();
+        }
+    });
+
+    rootContainer.appendChild(overlay);
+    加载目录(初始路径 || "");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -44,6 +165,7 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
     const tabDefs = [
         { id: "nca-settings-model", label: t("settings.tab.model") },
         { id: "nca-settings-github", label: t("settings.tab.github") },
+        { id: "nca-settings-memory", label: "🧠 记忆管理" },
         { id: "nca-settings-monitor", label: t("settings.tab.monitor") },
     ];
     let _monitorTimer = null;
@@ -65,6 +187,10 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
             } else {
                 if (_monitorTimer) { clearInterval(_monitorTimer); _monitorTimer = null; }
             }
+            // 记忆 Tab 激活时加载记忆数据
+            if (def.id === 'nca-settings-memory') {
+                加载记忆数据(panel);
+            }
         });
         tabButtons.push(btn);
         tabNav.appendChild(btn);
@@ -84,44 +210,23 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
     const modelNameInput = el("input", { type: "text", value: s.model_name || "", placeholder: "qwen2.5-coder-32b" });
     const apiKeyInput = el("input", { type: "password", value: s.api_key || "", placeholder: "sk-..." });
 
-    // 📂 打开系统原生文件夹选择对话框。仅 ComfyUI 本机运行场景下可用。
+    // 📂 弹出文件夹浏览器对话框（基于 browse-folder 端点，浏览器环境可用）
     const browseBtn = el("button", {
         class: "nca-btn nca-btn-sm nca-path-browse",
         text: "📂",
         title: "浏览本地文件夹…",
     });
-    browseBtn.addEventListener("click", async () => {
+    browseBtn.addEventListener("click", () => {
         if (browseBtn.disabled) return;
-        const 原文本 = browseBtn.textContent;
-        browseBtn.disabled = true;
-        browseBtn.textContent = "…";
-        try {
-            const headers = { "Content-Type": "application/json" };
-            try {
-                const token = localStorage.getItem("ComfyCommunity_Token") || sessionStorage.getItem("ComfyCommunity_Token");
-                if (token) headers["Authorization"] = `Bearer ${token}`;
-            } catch (_) {}
-            const resp = await fetch("/ai-coder/select-folder", {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ initial_dir: localPathInput.value || "" }),
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (resp.ok && data && data.path) {
-                localPathInput.value = data.path;
+        显示文件夹浏览器(
+            rootContainer,
+            localPathInput.value || s.default_local_path || "",
+            (选中路径) => {
+                localPathInput.value = 选中路径;
                 localPathInput.dispatchEvent(new Event("change", { bubbles: true }));
                 Toast && Toast.show && Toast.show("已选择路径", "success");
-            } else if (resp.ok && (!data || !data.path)) {
-                // 用户取消选择，不提示
-            } else {
-                Toast && Toast.show && Toast.show((data && data.error) || "无法打开文件夹选择对话框", "error");
             }
-        } catch (e) {
-            Toast && Toast.show && Toast.show(`选择失败: ${e && e.message ? e.message : e}`, "error");
-        } finally {
-            browseBtn.disabled = false;
-            browseBtn.textContent = 原文本;
-        }
+        );
     });
 
     const 默认路径Btn = el("button", { class: "nca-btn nca-btn-sm nca-btn-ghost", text: "↺ 默认路径" });
@@ -364,7 +469,185 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
 
     body.appendChild(githubTab);
 
-    // ══════ 页签3: 监控 ══════
+    // ══════ 页签3: 记忆管理 ══════
+    const memoryTab = el("div", { class: "nca-tab-content", id: "nca-settings-memory" });
+    memoryTab.style.display = "none";
+    memoryTab.innerHTML = `
+        <div class="nca-form-section">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <h4 style="color:#00d4ff; margin:0; font-size:12px; font-family:var(--nca-font-mono);">🧠 跨会话记忆</h4>
+                <div style="display:flex; gap:6px;">
+                    <button id="nca-memory-refresh" class="nca-btn nca-btn-xs" style="font-size:11px; padding:4px 8px;">刷新</button>
+                    <button id="nca-memory-clear" class="nca-btn nca-btn-xs nca-btn-danger" style="font-size:11px; padding:4px 8px;">清除全部</button>
+                </div>
+            </div>
+            <div id="nca-memory-content" style="max-height:400px; overflow-y:auto; font-size:12px;">
+                <div style="color:#6b7280; padding:12px; text-align:center;">点击"刷新"加载记忆数据</div>
+            </div>
+        </div>
+    `;
+    body.appendChild(memoryTab);
+
+    // 记忆数据加载与渲染
+    async function 加载记忆数据(panelRef) {
+        const contentDiv = (panelRef || panel).querySelector('#nca-memory-content');
+        if (!contentDiv) return;
+        contentDiv.innerHTML = '<div style="color:#6b7280; padding:12px; text-align:center;">加载中...</div>';
+        try {
+            const resp = await fetch('/ai-coder/memories');
+            const json = await resp.json();
+            if (!json.success || !json.data) {
+                contentDiv.innerHTML = '<div style="color:#ef4444; padding:8px;">加载失败</div>';
+                return;
+            }
+            const data = json.data;
+            const 全局 = data["全局记忆"] || {};
+            const 偏好列表 = 全局["用户偏好"] || [];
+            const 问题列表 = 全局["常见问题"] || [];
+            const 插件记忆 = data["插件记忆"] || {};
+            let html = '';
+
+            // 用户偏好
+            html += '<div style="margin-bottom:12px;">';
+            html += '<div style="color:var(--nca-accent); font-size:11px; margin-bottom:4px; font-family:var(--nca-font-mono);">[用户偏好]</div>';
+            if (偏好列表.length === 0) {
+                html += '<div style="color:#6b7280; padding:4px 0 4px 12px; font-size:11px;">暂无记录</div>';
+            } else {
+                偏好列表.forEach((item, i) => {
+                    html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--nca-fg-dim);">- ${_转义HTML(item.value || item.key || '')}</span>
+                        <button class="nca-memory-del-btn" data-type="用户偏好" data-index="${i}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:11px; padding:2px 6px; flex-shrink:0;">✕</button>
+                    </div>`;
+                });
+            }
+            html += '</div>';
+
+            // 常见问题
+            html += '<div style="margin-bottom:12px;">';
+            html += '<div style="color:var(--nca-accent); font-size:11px; margin-bottom:4px; font-family:var(--nca-font-mono);">[历史问题与解决方案]</div>';
+            if (问题列表.length === 0) {
+                html += '<div style="color:#6b7280; padding:4px 0 4px 12px; font-size:11px;">暂无记录</div>';
+            } else {
+                问题列表.forEach((item, i) => {
+                    html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; padding:4px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <div style="flex:1; min-width:0;">
+                            <div style="color:var(--nca-fg-dim); font-size:11px;">Q: ${_转义HTML(item.question || '')}</div>
+                            <div style="color:#6b7280; font-size:10px; margin-top:2px;">A: ${_转义HTML((item.solution || '').substring(0, 80))}${(item.solution || '').length > 80 ? '...' : ''}</div>
+                        </div>
+                        <button class="nca-memory-del-btn" data-type="常见问题" data-index="${i}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:11px; padding:2px 6px; flex-shrink:0;">✕</button>
+                    </div>`;
+                });
+            }
+            html += '</div>';
+
+            // 插件记忆
+            const 插件Keys = Object.keys(插件记忆);
+            if (插件Keys.length > 0) {
+                html += '<div>';
+                html += '<div style="color:var(--nca-accent); font-size:11px; margin-bottom:4px; font-family:var(--nca-font-mono);">[插件记忆]</div>';
+                插件Keys.forEach(插件名 => {
+                    const pm = 插件记忆[插件名];
+                    const 信息 = pm["项目信息"] || {};
+                    const 上下文列表 = pm["上下文"] || [];
+                    html += `<div style="padding:4px 0 4px 12px; border-bottom:1px solid rgba(255,255,255,0.05);">
+                        <div style="color:var(--nca-fg); font-size:11px; font-weight:600;">📦 ${_转义HTML(插件名)}</div>`;
+                    if (信息["技术栈"] && 信息["技术栈"].length > 0) {
+                        html += `<div style="color:var(--nca-fg-dim); font-size:10px; margin-top:2px;">技术栈: ${_转义HTML(信息["技术栈"].join(', '))}</div>`;
+                    }
+                    if (信息["最后活跃"]) {
+                        html += `<div style="color:#6b7280; font-size:10px;">最后活跃: ${_转义HTML(信息["最后活跃"])}</div>`;
+                    }
+                    上下文列表.forEach((ctx, i) => {
+                        html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
+                            <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--nca-fg-dim); font-size:10px;">- ${_转义HTML(ctx.content || '')}</span>
+                            <button class="nca-memory-del-btn" data-type="上下文" data-index="${i}" data-plugin="${插件名}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:11px; padding:2px 6px; flex-shrink:0;">✕</button>
+                        </div>`;
+                    });
+                    html += `</div>`;
+                });
+                html += '</div>';
+            }
+
+            if (!偏好列表.length && !问题列表.length && !插件Keys.length) {
+                html = '<div style="color:#6b7280; padding:12px; text-align:center;">暂无记忆数据</div>';
+            }
+            contentDiv.innerHTML = html;
+
+            // 绑定删除按钮
+            contentDiv.querySelectorAll('.nca-memory-del-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const type = btn.dataset.type;
+                    const index = parseInt(btn.dataset.index);
+                    const plugin = btn.dataset.plugin || null;
+                    try {
+                        const headers = { 'Content-Type': 'application/json' };
+                        try {
+                            const token = localStorage.getItem('ComfyCommunity_Token') || sessionStorage.getItem('ComfyCommunity_Token');
+                            if (token) headers['Authorization'] = `Bearer ${token}`;
+                        } catch (_) {}
+                        const resp = await fetch('/ai-coder/memories', {
+                            method: 'DELETE',
+                            headers,
+                            body: JSON.stringify({ type: 'item', 记忆类型: type, index, plugin_path: plugin }),
+                        });
+                        const rj = await resp.json();
+                        if (rj.success) {
+                            加载记忆数据(panelRef);
+                            Toast && Toast.show && Toast.show('已删除', 'success');
+                        } else {
+                            Toast && Toast.show && Toast.show(rj.message || '删除失败', 'error');
+                        }
+                    } catch (e) {
+                        Toast && Toast.show && Toast.show(`删除失败: ${e.message || e}`, 'error');
+                    }
+                });
+            });
+        } catch (e) {
+            contentDiv.innerHTML = '<div style="color:#ef4444; padding:8px;">加载失败</div>';
+        }
+    }
+
+    // 记忆 Tab 按钮事件绑定（延迟绑定确保 DOM 已创建）
+    setTimeout(() => {
+        const refreshBtn = panel.querySelector('#nca-memory-refresh');
+        const clearBtn = panel.querySelector('#nca-memory-clear');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => 加载记忆数据(panel));
+        }
+        if (clearBtn) {
+            clearBtn.addEventListener('click', async () => {
+                if (!confirm('确定要清除所有全局记忆吗？此操作不可撤销。')) return;
+                clearBtn.disabled = true;
+                clearBtn.textContent = '清除中...';
+                try {
+                    const headers = { 'Content-Type': 'application/json' };
+                    try {
+                        const token = localStorage.getItem('ComfyCommunity_Token') || sessionStorage.getItem('ComfyCommunity_Token');
+                        if (token) headers['Authorization'] = `Bearer ${token}`;
+                    } catch (_) {}
+                    const resp = await fetch('/ai-coder/memories', {
+                        method: 'DELETE',
+                        headers,
+                        body: JSON.stringify({}),
+                    });
+                    const rj = await resp.json();
+                    if (rj.success) {
+                        Toast && Toast.show && Toast.show('已清除全部记忆', 'success');
+                        加载记忆数据(panel);
+                    } else {
+                        Toast && Toast.show && Toast.show(rj.message || '清除失败', 'error');
+                    }
+                } catch (e) {
+                    Toast && Toast.show && Toast.show(`清除失败: ${e.message || e}`, 'error');
+                } finally {
+                    clearBtn.disabled = false;
+                    clearBtn.textContent = '清除全部';
+                }
+            });
+        }
+    }, 0);
+
+    // ══════ 页签4: 监控 ══════
     const monitorTab = el("div", { class: "nca-tab-content", id: "nca-settings-monitor" });
     monitorTab.style.display = "none";
     monitorTab.innerHTML = `

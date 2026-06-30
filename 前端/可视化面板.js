@@ -4,16 +4,60 @@
 // ═══════════════════════════════════════════════════════════════
 
 import {
-    el, NCA_API_BASE, NCA_STORAGE_KEYS, 简易Markdown渲染, 移除视觉能力警告, Toast,
+    el, NCA_API_BASE, NCA_STORAGE_KEYS, 安全存储读,
 } from "./工具函数.js";
-import { 状态 as 全局状态, 事件总线, 事件, 设置插件文件夹 } from "./交互与状态.js";
-import { 加载可视化库, 是否已加载可视化库, 创建可视化图, 销毁图 } from "./可视化引擎.js";
+import { 事件总线, 事件, 设置插件文件夹 } from "./交互与状态.js";
+import { 加载可视化库, 是否已加载可视化库, 创建可视化图, 销毁图, formatSize } from "./可视化引擎.js";
 import { 创建文件夹选择器 } from "./文件夹选择器.js";
 import { 创建附件组件 } from "./附件上传组件.js";
 import { 创建模型切换栏副本 } from "./插件开发面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
+import { 获取有效文件夹, 加载会话消息, 发送面板消息 } from "./面板会话公共.js";
 
-// ─── 模式颜色配置 ─────────────────────────────────────────────
+// ─── 演示数据（含 normal/error/warning 三种状态） ──────────
+    const 演示数据 = {
+        nodes: [
+            { id: "root", name: "我的插件", type: "root", size: 0, status: "normal", group: "核心" },
+            { id: "init", name: "__init__.py", type: "entry", size: 2048, status: "normal", group: "核心" },
+            { id: "nodes", name: "nodes/", type: "directory", size: 0, status: "normal", group: "节点" },
+            { id: "node_img", name: "图片处理.py", type: "script", size: 5120, status: "normal", group: "节点" },
+            { id: "node_text", name: "文本生成.py", type: "script", size: 3072, status: "warning", group: "节点" },
+            { id: "node_filter", name: "滤镜节点.py", type: "script", size: 1024, status: "error", group: "节点" },
+            { id: "utils", name: "utils/", type: "directory", size: 0, status: "normal", group: "工具" },
+            { id: "util_io", name: "文件读写.py", type: "script", size: 2560, status: "normal", group: "工具" },
+            { id: "util_cache", name: "缓存管理.py", type: "script", size: 1536, status: "warning", group: "工具" },
+            { id: "config", name: "config.json", type: "config", size: 512, status: "normal", group: "配置" },
+            { id: "readme", name: "README.md", type: "doc", size: 4096, status: "normal", group: "文档" },
+            { id: "web", name: "web/", type: "directory", size: 0, status: "normal", group: "前端" },
+            { id: "js_main", name: "主界面.js", type: "web", size: 8192, status: "normal", group: "前端" },
+            { id: "css", name: "样式.css", type: "style", size: 2048, status: "error", group: "前端" },
+        ],
+        links: [
+            { source: "root", target: "init", type: "containment", status: "normal" },
+            { source: "root", target: "nodes", type: "containment", status: "normal" },
+            { source: "root", target: "utils", type: "containment", status: "normal" },
+            { source: "root", target: "config", type: "containment", status: "normal" },
+            { source: "root", target: "readme", type: "containment", status: "normal" },
+            { source: "root", target: "web", type: "containment", status: "normal" },
+            { source: "nodes", target: "node_img", type: "containment", status: "normal" },
+            { source: "nodes", target: "node_text", type: "containment", status: "normal" },
+            { source: "nodes", target: "node_filter", type: "containment", status: "normal" },
+            { source: "utils", target: "util_io", type: "containment", status: "normal" },
+            { source: "utils", target: "util_cache", type: "containment", status: "normal" },
+            { source: "web", target: "js_main", type: "containment", status: "normal" },
+            { source: "web", target: "css", type: "containment", status: "normal" },
+            { source: "node_img", target: "util_io", type: "dependency", status: "normal" },
+            { source: "node_text", target: "util_io", type: "dependency", status: "normal" },
+            { source: "node_filter", target: "util_cache", type: "dependency", status: "normal" },
+            { source: "init", target: "node_img", type: "dependency", status: "normal" },
+            { source: "init", target: "node_text", type: "dependency", status: "normal" },
+            { source: "js_main", target: "css", type: "dependency", status: "normal" },
+        ],
+    };
+
+    let 演示模式中标识 = false;
+
+    // ─── 模式颜色配置 ─────────────────────────────────────────────
 const 文件模式颜色 = {
     python: '#3b82f6',
     javascript: '#f59e0b',
@@ -55,16 +99,6 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     let 当前会话 = null;
     let viz会话面板 = null;
 
-    function 获取有效文件夹() {
-        const pluginFolder = localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "";
-        const sessionFolder = 当前会话?.plugin_folder || "";
-        if (!pluginFolder && !sessionFolder) return null;
-        if (pluginFolder && sessionFolder) {
-            return 最后文件夹来源 === 'session' ? sessionFolder : pluginFolder;
-        }
-        return pluginFolder || sessionFolder;
-    }
-
     function 清除会话选择() {
         if (当前会话) {
             当前会话 = null;
@@ -74,7 +108,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     }
 
     function 同步当前插件名() {
-        const effectiveFolder = 获取有效文件夹();
+        const effectiveFolder = 获取有效文件夹(当前会话, 最后文件夹来源);
         if (effectiveFolder === 状态.当前插件名) return;
         if (effectiveFolder) {
             加载历史可视化(effectiveFolder);
@@ -83,7 +117,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             状态.缓存数据 = { meta: null, file: null, function: null };
             状态.显示模式 = null;
             清空图形();
-            显示分析引导();
+            加载演示可视化();
             更新状态栏(null);
             更新模式切换按钮可用状态();
         }
@@ -131,7 +165,6 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
 
     toolbar.appendChild(modeToggle);
     toolbar.appendChild(analyzeBtn);
-    panel.appendChild(toolbar);
 
     fileBtn.addEventListener('click', () => 选择操作模式('file'));
     funcBtn.addEventListener('click', () => 选择操作模式('function'));
@@ -144,7 +177,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         funcBtn.classList.toggle('active', mode === 'function');
     }
 
-    // ─── 主体区域：顶部会话列表（可折叠）+ 下方（可视化 + 消息 + 输入）──
+    // ─── 主体区域：顶部会话列表（可折叠）+ 切换模式栏 + 下方（可视化 + 消息 + 输入）──
     const mainArea = el("div", {
         class: "nca-panel-main-area",
         style: {
@@ -168,6 +201,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         },
     });
     mainArea.appendChild(sidebarContainer);
+    mainArea.appendChild(toolbar);
 
     // 右侧内容区（可视化图 + 消息 + 输入）
     const contentArea = el("div", {
@@ -176,8 +210,9 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             flex: "1",
             display: "flex",
             flexDirection: "column",
+            minHeight: "0",
             minWidth: "0",
-            overflow: "hidden",
+            overflow: "auto",
         },
     });
     mainArea.appendChild(contentArea);
@@ -185,7 +220,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     // ─── 可视化容器（含左上角浮层） ──────────────────────────
     const vizContainer = el("div", {
         class: "nc-viz-container",
-        style: { flex: "1", minHeight: "200px", position: "relative", overflow: "hidden" },
+        style: { height: "480px", flexShrink: "0", position: "relative", overflow: "hidden" },
     });
     contentArea.appendChild(vizContainer);
 
@@ -211,6 +246,175 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     overlayFuncBtn.addEventListener('click', () => {
         if (overlayFuncBtn.classList.contains('disabled')) return;
         切换显示模式('function');
+    });
+
+    // ─── HUD 覆盖层元素 ──────────────────────────────────────
+    // 搜索框（左上角）
+    const hudSearch = el("div", { class: "nc-viz-hud-search" });
+    const hudSearchIcon = el("span", { class: "nc-viz-hud-search-icon", html: "🔍" });
+    const hudSearchInput = el("input", { type: "text", placeholder: "搜索节点..." });
+    hudSearch.appendChild(hudSearchIcon);
+    hudSearch.appendChild(hudSearchInput);
+    vizContainer.appendChild(hudSearch);
+
+    // 标题（顶部居中）
+    const hudTitle = el("div", {
+        class: "nc-viz-hud-title",
+        html: `<h1>功能结构分析仪</h1><div class="nc-viz-hud-subtitle">STRUCTURAL DIAGNOSTICS</div>`,
+    });
+    vizContainer.appendChild(hudTitle);
+
+    // 统计栏（右上角）
+    const hudStats = el("div", { class: "nc-viz-hud-stats" });
+    const statTotal = el("div", { class: "nc-viz-hud-stat", html: `<span class="nc-viz-hud-dot c"></span><span>节点</span> <strong>0</strong>` });
+    const statNormal = el("div", { class: "nc-viz-hud-stat", html: `<span class="nc-viz-hud-dot g"></span><span>正常</span> <strong>0</strong>` });
+    const statError = el("div", { class: "nc-viz-hud-stat", html: `<span class="nc-viz-hud-dot r"></span><span>异常</span> <strong>0</strong>` });
+    const statWarning = el("div", { class: "nc-viz-hud-stat", html: `<span class="nc-viz-hud-dot a"></span><span>警告</span> <strong>0</strong>` });
+    hudStats.appendChild(statTotal);
+    hudStats.appendChild(statNormal);
+    hudStats.appendChild(statError);
+    hudStats.appendChild(statWarning);
+    vizContainer.appendChild(hudStats);
+
+    // 全屏按钮（右上角统计栏下方）
+    const hudFullscreen = el("button", {
+        type: "button",
+        class: "nc-viz-hud-fullscreen",
+        html: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h6M20 8V4h-6M4 16v4h6M20 16v4h-6"/></svg>`,
+        title: "全屏显示",
+    });
+    hudFullscreen.addEventListener("click", () => {
+        if (document.fullscreenElement === vizContainer) {
+            document.exitFullscreen();
+        } else {
+            vizContainer.requestFullscreen();
+        }
+    });
+    document.addEventListener("fullscreenchange", () => {
+        if (document.fullscreenElement === vizContainer) {
+            hudFullscreen.classList.add("active");
+            hudFullscreen.title = "退出全屏";
+            hudFullscreen.innerHTML = `<span style="font-size:20px;line-height:1">&times;</span>`;
+        } else {
+            hudFullscreen.classList.remove("active");
+            hudFullscreen.title = "全屏显示";
+            hudFullscreen.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h6M20 8V4h-6M4 16v4h6M20 16v4h-6"/></svg>`;
+        }
+    });
+    vizContainer.appendChild(hudFullscreen);
+
+    // 图例（左下角）
+    const hudLegend = el("div", {
+        class: "nc-viz-hud-legend",
+        html: `
+            <h3>图 例</h3>
+            <div class="nc-viz-hud-legend-item"><span class="nc-viz-hud-legend-line green"></span>正常关联</div>
+            <div class="nc-viz-hud-legend-item"><span class="nc-viz-hud-legend-line red"></span>异常关联</div>
+            <div class="nc-viz-hud-legend-item"><span class="nc-viz-hud-legend-node ok"></span>正常节点</div>
+            <div class="nc-viz-hud-legend-item"><span class="nc-viz-hud-legend-node err"></span>异常节点</div>
+            <div class="nc-viz-hud-legend-item"><span class="nc-viz-hud-legend-node warn"></span>警告节点</div>
+        `,
+    });
+    vizContainer.appendChild(hudLegend);
+
+    // 过滤按钮（底部居中）
+    const hudFilters = el("div", { class: "nc-viz-hud-filters" });
+    const filterButtons = [
+        { label: "全部", status: "all" },
+        { label: "异常", status: "error" },
+        { label: "警告", status: "warning" },
+        { label: "正常", status: "normal" },
+    ];
+    let 当前过滤 = "all";
+    filterButtons.forEach(cfg => {
+        const btn = el("button", { type: "button", html: cfg.label });
+        if (cfg.status === "all") btn.classList.add("active");
+        btn.addEventListener("click", () => {
+            当前过滤 = cfg.status;
+            hudFilters.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            const g = getGraph();
+            if (g && typeof g.filterNodes === "function") {
+                g.filterNodes(cfg.status);
+            }
+        });
+        hudFilters.appendChild(btn);
+    });
+    vizContainer.appendChild(hudFilters);
+
+    // 操作提示（右下角）
+    const hudControls = el("div", {
+        class: "nc-viz-hud-controls",
+        html: `
+            <div><kbd>左键拖拽</kbd> 旋转</div>
+            <div><kbd>滚轮</kbd> 缩放</div>
+            <div><kbd>右键拖拽</kbd> 平移</div>
+            <div><kbd>点击节点</kbd> 详情</div>
+        `,
+    });
+    vizContainer.appendChild(hudControls);
+
+    // HUD 角标装饰
+    const hudCorners = [];
+    ['tl','tr','bl','br'].forEach(pos => {
+        const corner = el("div", { class: `nc-viz-hud-corner ${pos}` });
+        vizContainer.appendChild(corner);
+        hudCorners.push(corner);
+    });
+
+    // 节点详情面板（右侧滑出）
+    const detailPanel = el("div", { class: "nc-viz-detail-panel" });
+    detailPanel.innerHTML = `
+        <button class="nc-viz-detail-close">×</button>
+        <div class="nc-viz-detail-name"></div>
+        <div class="nc-viz-detail-type"></div>
+        <div class="nc-viz-detail-status normal">正常</div>
+        <div class="nc-viz-detail-desc"></div>
+        <div class="nc-viz-detail-conn-title">关联列表</div>
+        <ul class="nc-viz-detail-conn"></ul>
+    `;
+    vizContainer.appendChild(detailPanel);
+    detailPanel.querySelector('.nc-viz-detail-close').addEventListener('click', () => {
+        detailPanel.classList.remove('open');
+    });
+
+    // Tooltip（鼠标悬停）
+    const tooltip = el("div", { class: "nc-viz-tooltip" });
+    vizContainer.appendChild(tooltip);
+
+    // HUD 统计更新函数（数字动画）
+    function 更新HUD统计(graph) {
+        if (!graph || typeof graph.getStats !== "function") return;
+        const s = graph.getStats();
+        动画数字(statTotal.querySelector("strong"), s.total);
+        动画数字(statNormal.querySelector("strong"), s.normal);
+        动画数字(statError.querySelector("strong"), s.error);
+        动画数字(statWarning.querySelector("strong"), s.warning);
+    }
+
+    function 动画数字(el, target) {
+        if (el._animTimer) clearInterval(el._animTimer);
+        const steps = 20;
+        const interval = 30;
+        let step = 0;
+        el.textContent = '0';
+        el._animTimer = setInterval(() => {
+            step++;
+            el.textContent = Math.round(target * (step / steps));
+            if (step >= steps) {
+                el.textContent = target;
+                clearInterval(el._animTimer);
+                el._animTimer = null;
+            }
+        }, interval);
+    }
+
+    // 搜索事件
+    hudSearchInput.addEventListener("input", () => {
+        const g = getGraph();
+        if (g && typeof g.searchNodes === "function") {
+            g.searchNodes(hudSearchInput.value);
+        }
     });
 
     // ─── 消息区 + 模型栏 + 输入区 ────────────────────────────
@@ -248,16 +452,10 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         vizSendBtn.classList.toggle("active", vizInput.value.trim().length > 0 || viz附件.有附件());
     });
 
-    function vizFormatSize(bytes) {
-        if (!bytes) return '0B';
-        if (bytes < 1024) return `${bytes}B`;
-        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-        return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-    }
 
     // ─── 状态栏 / 按钮辅助 ───────────────────────────────────
     function 更新状态栏(stats) {
-        const pluginName = 状态.当前插件名 || 获取有效文件夹();
+        const pluginName = 状态.当前插件名 || 获取有效文件夹(当前会话, 最后文件夹来源);
         if (!pluginName) {
             vizStatus.textContent = '请选择要分析的插件';
             return;
@@ -322,13 +520,22 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     }
 
     function 清空图形() {
+        隐藏演示标签();
         const g = getGraph();
         if (g) 销毁图(g);
         setGraph(null);
-        // 仅移除图形相关 DOM，保留 overlay
+        // 仅移除图形相关 DOM，保留 overlay 和 HUD 元素
+        detailPanel.classList.remove('open');
+        tooltip.classList.remove('visible');
+        const hud保留 = new Set([hudSearch, hudTitle, hudStats, hudFullscreen, hudLegend, hudFilters, hudControls, detailPanel, tooltip, ...hudCorners]);
         Array.from(vizContainer.children).forEach(child => {
-            if (child !== overlay) vizContainer.removeChild(child);
+            if (child !== overlay && !hud保留.has(child)) vizContainer.removeChild(child);
         });
+        // 重置统计
+        statTotal.querySelector("strong").textContent = "0";
+        statNormal.querySelector("strong").textContent = "0";
+        statError.querySelector("strong").textContent = "0";
+        statWarning.querySelector("strong").textContent = "0";
     }
 
     // ─── 渲染图形 ─────────────────────────────────────────────
@@ -370,19 +577,69 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         const graph = 创建可视化图(vizContainer, { nodes: data.nodes || [], links: data.links || [] }, {
             onNodeClick: (node) => {
                 if (!node) return;
-                const 大小行 = node.size != null ? ` — ${vizFormatSize(node.size)}` : '';
+                const 大小行 = node.size != null ? ` — ${formatSize(node.size)}` : '';
                 const 类别 = node.type || node.category || '';
                 vizMsgArea.appendChild(el("div", {
                     class: "nca-msg nca-msg-system",
                     html: `<strong>${node.name || node.id}</strong> (${类别})${大小行}<br>路径: ${node.id}`,
                 }));
                 vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
+
+                // 填充详情面板
+                const 状态文本 = node.status === 'error' ? '异常' : node.status === 'warning' ? '警告' : '正常';
+                const 状态类 = node.status || 'normal';
+                detailPanel.querySelector('.nc-viz-detail-name').textContent = node.name || node.id;
+                detailPanel.querySelector('.nc-viz-detail-type').textContent = 类别;
+                const statusBadge = detailPanel.querySelector('.nc-viz-detail-status');
+                statusBadge.className = `nc-viz-detail-status ${状态类}`;
+                statusBadge.textContent = 状态文本;
+                detailPanel.querySelector('.nc-viz-detail-desc').textContent = node.reason || node.id;
+
+                // 关联列表
+                const connList = detailPanel.querySelector('.nc-viz-detail-conn');
+                connList.innerHTML = '';
+                if (graph && graph._edges) {
+                    graph._edges.forEach(e => {
+                        if (e.source === node.id) {
+                            const tNode = graph._nodeMap[e.target];
+                            if (tNode) {
+                                const li = el("li", { html: `<span class="conn-arrow">→</span><span>${tNode.name || tNode.id}</span>` });
+                                connList.appendChild(li);
+                            }
+                        } else if (e.target === node.id) {
+                            const sNode = graph._nodeMap[e.source];
+                            if (sNode) {
+                                const li = el("li", { html: `<span class="conn-arrow">←</span><span>${sNode.name || sNode.id}</span>` });
+                                connList.appendChild(li);
+                            }
+                        }
+                    });
+                }
+                detailPanel.classList.add('open');
+            },
+            onNodeHover: (node, event) => {
+                if (node) {
+                    const 状态文本 = node.status === 'error' ? '异常' : node.status === 'warning' ? '警告' : '正常';
+                    const 状态类 = node.status || 'normal';
+                    tooltip.innerHTML = `<div class="tt-name">${node.name || node.id}</div><div class="tt-status ${状态类}">${状态文本}</div>`;
+                    tooltip.classList.add('visible');
+                    if (event) {
+                        tooltip.style.left = (event.clientX + 14) + 'px';
+                        tooltip.style.top = (event.clientY + 14) + 'px';
+                    }
+                } else {
+                    tooltip.classList.remove('visible');
+                }
             },
         });
 
         if (graph) {
             try {
-                graph.nodeColor(node => 颜色映射[node.type] || 颜色映射[node.category] || 默认色);
+                graph.nodeColor(node => {
+                    if (node.status === 'error') return '#ff2255';
+                    if (node.status === 'warning') return '#ffaa00';
+                    return '#00ff88';
+                });
                 if (mode === 'function') {
                     graph.linkLabel(link => link.label || link.relation || '');
                     graph.linkDirectionalParticles(link => (link.label || link.relation) ? 2 : 0);
@@ -390,6 +647,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             } catch (e) { /* 图实例尚未支持时忽略 */ }
         }
         setGraph(graph);
+        更新HUD统计(graph);
     }
 
     // ─── 加载历史可视化数据 ───────────────────────────────────
@@ -443,7 +701,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
 
     // ─── 开始分析 ─────────────────────────────────────────────
     async function 开始分析() {
-        const pluginName = 状态.当前插件名 || 获取有效文件夹();
+        const pluginName = 状态.当前插件名 || 获取有效文件夹(当前会话, 最后文件夹来源);
         if (!pluginName) {
             vizStatus.textContent = '⚠️ 请先选择要分析的插件';
             return;
@@ -483,8 +741,51 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         }
     }
 
-    // 初始引导
-    显示分析引导();
+    // ─── 演示标签 ──────────────────────────────────────────────
+    let 演示标签El = null;
+    function 显示演示标签() {
+        if (演示标签El) return;
+        演示标签El = el("div", {
+            class: "nca-viz-demo-badge",
+            style: {
+                position: "absolute", top: "8px", left: "50%", transform: "translateX(-50%)",
+                zIndex: "10", padding: "5px 14px", borderRadius: "6px",
+                background: "rgba(0,20,50,0.82)", border: "1px solid rgba(0,200,255,0.25)",
+                color: "#7dd3fc", fontSize: "11px", whiteSpace: "nowrap",
+                backdropFilter: "blur(6px)", pointerEvents: "none",
+            },
+            html: "📎 演示数据 — 选择插件后点击「开始分析」查看实际结构",
+        });
+        vizContainer.appendChild(演示标签El);
+    }
+    function 隐藏演示标签() {
+        if (演示标签El) {
+            演示标签El.remove();
+            演示标签El = null;
+        }
+    }
+
+    // ─── 加载演示数据 ───────────────────────────────────────────
+    async function 加载演示可视化() {
+        if (演示模式中标识) return;
+        演示模式中标识 = true;
+        try {
+            await 渲染图形(演示数据, 'file');
+            vizStatus.textContent = '📎 演示模式 — 选择插件并点击「开始分析」查看实际结构';
+        } catch (e) {
+            console.warn('[可视化面板] 演示数据加载失败:', e);
+            显示分析引导();
+        }
+        演示模式中标识 = false;
+    }
+
+    // ─── 初始引导：检查持久化选择，决定显示历史数据或演示 ────
+    const 持久化插件 = 安全存储读(NCA_STORAGE_KEYS.plugin);
+    if (持久化插件) {
+        加载历史可视化(持久化插件);
+    } else {
+        加载演示可视化();
+    }
 
     // 通过事件总线统一同步插件选择状态与"已选择"标签，并实现插件列表与会话的互斥选择
     事件总线.on(事件.插件选择变更, (pluginName) => {
@@ -496,28 +797,6 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     });
 
     // ─── 创建会话列表面板（侧边栏） ──────────────────────────
-    async function 加载可视化会话历史(sessionId) {
-        vizMsgArea.innerHTML = "";
-        if (!sessionId) return;
-        try {
-            const res = await fetch(`${NCA_API_BASE}/sessions/${sessionId}/messages`);
-            if (!res.ok) return;
-            const data = await res.json();
-            const messages = data.messages || [];
-            messages.forEach(msg => {
-                const isUser = msg.role === "user";
-                const bubble = el("div", { class: `nca-msg ${isUser ? "nca-msg-user" : "nca-msg-ai"}` });
-                const body = el("div", { class: "nca-msg-content" });
-                body.innerHTML = isUser ? (msg.content || "") : 简易Markdown渲染(msg.content || "");
-                bubble.appendChild(body);
-                vizMsgArea.appendChild(bubble);
-            });
-            vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
-        } catch (e) {
-            console.warn("[节点梦工厂] 加载可视化会话历史失败:", e);
-        }
-    }
-
     viz会话面板 = 创建会话列表面板({
         type: "visualize",
         container: sidebarContainer,
@@ -538,7 +817,15 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             }
             当前会话 = session || null;
             同步当前插件名();
-            加载可视化会话历史(session?.id);
+            加载会话消息(session?.id, vizMsgArea, {
+                input: vizInput,
+                sendBtn: vizSendBtn,
+                msgArea: vizMsgArea,
+                附件: viz附件,
+                activeTab: 'visualize',
+                getSessionId: () => 当前会话?.id || viz会话面板.getCurrentSessionId(),
+                getPluginFolder: () => 状态.当前插件名 || 获取有效文件夹(当前会话, 最后文件夹来源),
+            });
         },
         onSessionDelete: () => {
             if (!viz会话面板.getCurrentSessionId()) {
@@ -552,94 +839,15 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
 
     // ─── 输入区交互：发送问答（SSE 流式，必须选择插件目录） ────────────────────────────
     vizSendBtn.addEventListener('click', async () => {
-        const selectedPlugin = 状态.当前插件名 || 获取有效文件夹() || "";
-        // 硬性阻止：未选择插件目录时禁止发送
-        if (!selectedPlugin) {
-            Toast.warning("请先选择一个插件目录");
-            return;
-        }
-        const content = vizInput.value.trim();
-        const 当前附件 = viz附件.获取附件();
-        if (!content && 当前附件.length === 0) return;
-        // 确保有活跃会话
-        const vizSessionId = viz会话面板.getCurrentSessionId();
-        if (!vizSessionId) {
-            Toast.warning("请先新建或选择一个会话");
-            return;
-        }
-        const 显示文本 = content || `[已附加 ${当前附件.length} 个文件]`;
-        vizMsgArea.appendChild(el("div", { class: "nca-msg nca-msg-user" }, [
-            el("div", { class: "nca-msg-content", text: 显示文本 }),
-        ]));
-        vizInput.value = '';
-        vizInput.style.height = "auto";
-        viz附件.清空();
-        移除视觉能力警告(vizInputArea);
-        vizSendBtn.classList.remove("active");
-        vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
-
-        // AI 回复气泡（流式渲染目标）
-        const aiBubble = el("div", { class: "nca-msg nca-msg-ai" });
-        const aiBody = el("div", { class: "nca-msg-content", html: '<span class="nca-streaming-cursor"></span>' });
-        aiBubble.appendChild(aiBody);
-        vizMsgArea.appendChild(aiBubble);
-        vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
-        try {
-            vizSendBtn.disabled = true;
-            const requestBody = {
-                message: content,
-                session_id: vizSessionId,
-                plugin_context: selectedPlugin,
-                model_source: 全局状态.模型来源 || 'api',
-                activeTab: 'visualize',
-            };
-            if (当前附件.length > 0) requestBody.attachments = 当前附件;
-            const response = await fetch(`${NCA_API_BASE}/chat-stream`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            });
-            if (!response.ok) {
-                let errorMsg = `HTTP ${response.status}`;
-                try { const errData = await response.json(); if (errData.error) errorMsg = errData.error; } catch (_) {}
-                throw new Error(errorMsg);
-            }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let fullContent = '';
-            let buffer = '';
-            let hasError = false;
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop();
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    try {
-                        const evt = JSON.parse(line.slice(6));
-                        if (evt.error) { hasError = true; fullContent += `\n⚠ 错误: ${evt.error}`; break; }
-                        if (evt.done) break;
-                        if (evt.content) {
-                            fullContent += evt.content;
-                            aiBody.innerHTML = 简易Markdown渲染(fullContent) + '<span class="nca-streaming-cursor"></span>';
-                            vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
-                        }
-                    } catch (_) { /* 跳过无法解析的行 */ }
-                }
-                if (hasError) break;
-            }
-            aiBody.innerHTML = 简易Markdown渲染(fullContent || "（无回复）");
-        } catch (e) {
-            aiBody.innerHTML = '';
-            aiBubble.classList.remove('nca-msg-ai');
-            aiBubble.classList.add('nca-msg-system');
-            aiBody.textContent = `❌ 网络错误: ${e.message}`;
-        } finally {
-            vizSendBtn.disabled = false;
-            vizMsgArea.scrollTop = vizMsgArea.scrollHeight;
-        }
+        await 发送面板消息({
+            input: vizInput,
+            sendBtn: vizSendBtn,
+            msgArea: vizMsgArea,
+            附件: viz附件,
+            activeTab: 'visualize',
+            getSessionId: () => viz会话面板.getCurrentSessionId(),
+            getPluginFolder: () => 状态.当前插件名 || 获取有效文件夹(当前会话, 最后文件夹来源),
+        });
     });
     vizInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {

@@ -4,19 +4,22 @@
 // ═══════════════════════════════════════════════════════════════
 
 import {
-    el, NCA_STORAGE_KEYS, registerCleanup, trackPanelTimer, removePanelTimer,
+    el, NCA_STORAGE_KEYS, registerCleanup, trackPanelTimer, removePanelTimer, 安全存储读,
 } from "./工具函数.js";
 import { 获取本地插件列表, 事件总线, 事件, 设置插件文件夹 } from "./交互与状态.js";
+import { 创建代码审查按钮 } from "./代码审查面板.js";
 
 /**
  * 创建文件夹选择器组件
  * @param {Function} onSelect - 选中插件后的回调 (pluginName: string) => void
+ * @param {Function} [获取插件路径] - 返回当前选中的插件路径的回调
+ * @param {Function} [onReviewClick] - 自定义审查按钮点击回调 (pluginPath: string) => void；传入时覆盖默认弹窗行为
  * @returns {HTMLElement} 组件 DOM 元素
  */
-export function 创建文件夹选择器(onSelect) {
+export function 创建文件夹选择器(onSelect, 获取插件路径, onReviewClick) {
     let 当前列表 = [];
     let 当前显示列表 = [];
-    let 选中项 = localStorage.getItem(NCA_STORAGE_KEYS.plugin) || '';
+    let 选中项 = 安全存储读(NCA_STORAGE_KEYS.plugin);
 
     // 外层包装：默认折叠（每次刷新回到折叠状态，不持久化）
     const 容器 = el("div", { class: "nc-folder-selector-wrapper collapsed" });
@@ -29,6 +32,30 @@ export function 创建文件夹选择器(onSelect) {
     标题栏.appendChild(箭头);
     标题栏.appendChild(标题文本);
     标题栏.appendChild(已选名称);
+
+    // 代码审查按钮（放置在标题栏右侧）
+    const 路径回调 = 获取插件路径 || (() => 选中项);
+    let reviewBtn;
+    if (typeof onReviewClick === "function") {
+        // 优化面板覆盖默认行为：显示深度选择菜单并内嵌审查视图
+        reviewBtn = el("button", {
+            class: "nca-review-btn nc-folder-review-btn",
+            title: "AI 代码审查",
+            html: '<span class="nca-review-icon">🔍</span> 代码审查',
+        });
+        reviewBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            onReviewClick(路径回调());
+        });
+    } else {
+        reviewBtn = 创建代码审查按钮(路径回调);
+        reviewBtn.classList.add("nc-folder-review-btn");
+        // 阻止点击冒泡到标题栏，避免触发折叠/展开
+        reviewBtn.addEventListener("click", (e) => e.stopPropagation());
+    }
+    // 初始禁用状态：未选择文件夹时禁用
+    reviewBtn.disabled = !路径回调();
+    标题栏.appendChild(reviewBtn);
 
     // 内容区（包含原有的搜索行、列表、外部装载按钮）
     const 内容区 = el("div", { class: "nc-folder-selector-content nc-folder-selector" });
@@ -72,6 +99,8 @@ export function 创建文件夹选择器(onSelect) {
     // 更新标题栏的已选文件夹名
     function 更新已选名称(name) {
         已选名称.textContent = name || "";
+        // 同步更新审查按钮的禁用状态
+        reviewBtn.disabled = !路径回调();
     }
 
     // 渲染列表

@@ -7,26 +7,17 @@ import { el, Toast } from "./工具函数.js";
 import {
     事件总线, 事件, 状态,
     推导平台名称, 更新模型选择,
-    graphqlClient,
+    请求,
 } from "./交互与状态.js";
-import { UNLOAD_MODEL } from "./graphql查询模板.js";
 
-// 子模块导入（同时 re-export，保持 会话视图管理器.js 等调用方导入路径不变）
-import { 创建文件夹选择器 } from "./文件夹选择器.js";
-import { 创建附件组件 } from "./附件上传组件.js";
+// 子模块导入
 import { 构建优化面板 } from "./优化面板.js";
 import { 构建可视化面板 } from "./可视化面板.js";
-import { 显示GitHub同步对话框 } from "./GitHub同步对话框.js";
-import { 创建会话列表面板 } from "./会话列表面板.js";
 
-// Re-export 公共 API（保持外部调用方 `from "./插件开发面板.js"` 无需修改）
+// Re-export 公共 API
 export {
-    创建文件夹选择器,
-    创建附件组件,
     构建优化面板,
     构建可视化面板,
-    显示GitHub同步对话框,
-    创建会话列表面板,
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -40,7 +31,7 @@ export function 创建模型切换栏副本(ctx) {
     const aBtn = el("button", { class: `nca-switch-btn ${状态.模型来源 === "api" ? "active" : ""}`, text: "API" });
     grp.appendChild(lBtn); grp.appendChild(aBtn); bar.appendChild(grp);
     const lSel = el("select", { class: "nca-model-select" }); lSel.style.display = 状态.模型来源 === "local" ? "" : "none";
-    // 释放显存按钮：仅本地模式可见，调用 GraphQL 卸载模型 mutation 以释放本地模型占用的显存/内存
+    // 释放显存按钮：仅本地模式可见，调用 REST 卸载模型接口以释放本地模型占用的显存/内存
     const unloadBtn = el("button", { class: "nca-unload-btn", text: "释放显存", title: "卸载本地模型，释放显存/内存" });
     unloadBtn.style.display = 状态.模型来源 === "local" ? "" : "none";
     const aInfo = el("span", { class: "nca-api-info" }); aInfo.style.display = 状态.模型来源 === "api" ? "" : "none";
@@ -68,8 +59,8 @@ export function 创建模型切换栏副本(ctx) {
         unloadBtn.classList.add("loading");
         unloadBtn.textContent = "释放中…";
         try {
-            const 结果 = await graphqlClient.mutate(UNLOAD_MODEL, {});
-            if (结果 && 结果.卸载模型 === true) {
+            const 结果 = await 请求("POST", "/unload-model", {});
+            if (结果 && 结果.success === true) {
                 unloadBtn.textContent = "已释放";
                 try { Toast && Toast.success && Toast.success("已释放本地模型显存"); } catch (_) {}
             } else {

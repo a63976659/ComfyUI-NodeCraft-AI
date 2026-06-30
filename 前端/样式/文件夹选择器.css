@@ -70,6 +70,21 @@
     display: inline-block;
 }
 
+/* ─── 标题栏内代码审查按钮 ─── */
+.nc-folder-selector-toggle .nca-review-btn {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+/* disabled 状态：穿透鼠标事件，使点击落在标题栏上触发折叠 */
+.nc-folder-selector-toggle .nca-review-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 /* 折叠时隐藏内容区 */
 .nc-folder-selector-wrapper.collapsed .nc-folder-selector-content {
     display: none;

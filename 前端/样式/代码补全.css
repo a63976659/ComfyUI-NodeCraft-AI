@@ -1,0 +1,27 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 代码补全浮层
+   ghost text 风格叠加层，自动适配深色 / 浅色主题
+   ═══════════════════════════════════════════════════════════════ */
+
+.nca-completion-overlay {
+    position: absolute;
+    pointer-events: none;
+    font-family: var(--nca-font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--nca-fg);
+    opacity: 0.4;
+    white-space: pre;
+    z-index: var(--nca-z-dropdown);
+    user-select: none;
+}
+
+.nca-completion-loading {
+    opacity: 0.3;
+    animation: nca-completion-pulse 1s infinite;
+}
+
+@keyframes nca-completion-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.6; }
+}

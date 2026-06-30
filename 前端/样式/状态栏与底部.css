@@ -115,3 +115,40 @@
     background: var(--nca-accent-dim);
     border-color: var(--nca-accent);
 }
+
+/* 上下文健康度指示器 */
+.nca-context-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-secondary, #8b949e);
+}
+
+.context-bar-bg {
+    width: 40px;
+    height: 4px;
+    background: var(--bg-tertiary, #21262d);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.context-bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    transition: width 0.3s ease, background-color 0.3s ease;
+    background: var(--accent-color, #58a6ff);
+}
+
+.context-bar-fill.level-info {
+    background: var(--accent-color, #58a6ff);
+}
+
+.context-bar-fill.level-warning {
+    background: #f59e0b;
+}
+
+.context-bar-fill.level-critical {
+    background: #ef4444;
+}

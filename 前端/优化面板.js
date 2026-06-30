@@ -4,13 +4,15 @@
 // ═══════════════════════════════════════════════════════════════
 
 import {
-    el, NCA_STORAGE_KEYS, NCA_API_BASE, 简易Markdown渲染, 移除视觉能力警告, Toast,
+    el, Toast,
 } from "./工具函数.js";
-import { 状态, 事件总线, 事件, 设置插件文件夹 } from "./交互与状态.js";
+import { 事件总线, 事件, 设置插件文件夹, 获取会话列表, 创建会话 } from "./交互与状态.js";
 import { 创建文件夹选择器 } from "./文件夹选择器.js";
 import { 创建附件组件 } from "./附件上传组件.js";
 import { 创建模型切换栏副本 } from "./插件开发面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
+import { 执行代码审查, 渲染审查结果, 格式化审查为消息内容 } from "./代码审查面板.js";
+import { 获取有效文件夹, 加载会话消息, 发送面板消息 } from "./面板会话公共.js";
 
 /**
  * 构建"优化插件"面板
@@ -19,42 +21,105 @@ import { 创建会话列表面板 } from "./会话列表面板.js";
  */
 export function 构建优化面板(panel, ctx) {
     // ─── 顶部：文件夹选择器 + 状态栏 ─────────────────────────
-    const selector = 创建文件夹选择器();
-    panel.appendChild(selector);
-
     const status = el("div", { class: "nc-optimize-status", style: { padding: "6px 12px", fontSize: "11px", color: "#6b7280", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: "0", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } });
     const statusMain = el("span", { class: "nc-optimize-status-main" });
     const statusCurrent = el("span", { class: "nc-optimize-status-current", style: { display: "none", color: "#9ca3af" } });
     status.appendChild(statusMain);
     status.appendChild(statusCurrent);
-    panel.appendChild(status);
-    
+
+    // 代码审查深度选项（供文件夹选择器中的审查按钮下拉菜单使用）
+    const depthOptions = [
+        { value: "quick", label: "快速审查（核心文件）" },
+        { value: "standard", label: "标准审查（所有 Python）" },
+        { value: "deep", label: "深度审查（Python + JS）" },
+    ];
+
+    // 显示深度选择下拉菜单（定位到指定按钮下方）
+    function 显示深度选择菜单(anchor, onSelect) {
+        if (!anchor) return;
+        const existing = document.querySelector(".nca-review-depth-menu-optimize");
+        if (existing) existing.remove();
+
+        const menu = el("div", {
+            class: "nca-review-depth-menu nca-review-depth-menu-optimize",
+            style: {
+                display: "flex",
+                position: "fixed",
+                zIndex: "10000",
+                flexDirection: "column",
+                gap: "2px",
+                background: "var(--nca-bg-secondary, #1a1a2e)",
+                border: "1px solid var(--nca-border, rgba(255,255,255,0.08))",
+                borderRadius: "6px",
+                padding: "4px",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                minWidth: "140px",
+            },
+        });
+        const rect = anchor.getBoundingClientRect();
+        menu.style.top = (rect.bottom + 4) + "px";
+        menu.style.left = rect.left + "px";
+
+        depthOptions.forEach(d => {
+            const opt = el("button", {
+                text: d.label,
+                style: {
+                    padding: "6px 12px",
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--nca-fg-dim, #9ca3af)",
+                    fontSize: "12px",
+                    cursor: "pointer",
+                    borderRadius: "4px",
+                    textAlign: "left",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--nca-font-mono, monospace)",
+                },
+            });
+            opt.addEventListener("mouseenter", () => {
+                opt.style.background = "var(--nca-accent-dim, rgba(91,159,255,0.1))";
+                opt.style.color = "var(--nca-accent, #5b9fff)";
+            });
+            opt.addEventListener("mouseleave", () => {
+                opt.style.background = "transparent";
+                opt.style.color = "var(--nca-fg-dim, #9ca3af)";
+            });
+            opt.addEventListener("click", (e) => {
+                e.stopPropagation();
+                menu.remove();
+                onSelect(d.value);
+            });
+            menu.appendChild(opt);
+        });
+
+        document.body.appendChild(menu);
+        requestAnimationFrame(() => {
+            document.addEventListener("click", function closeMenu() {
+                menu.remove();
+                document.removeEventListener("click", closeMenu);
+            });
+        });
+    }
+
     // 跟踪当前会话、会话面板折叠状态以及最后操作来源，用于实现插件列表与会话的互斥选择
     let 当前会话 = null;
     let 会话面板折叠 = false;
     let 最后文件夹来源 = null; // 'plugin' | 'session' | null
     let 会话面板 = null;
-
-    function 获取有效文件夹() {
-        const pluginFolder = localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "";
-        const sessionFolder = 当前会话?.plugin_folder || "";
-        if (!pluginFolder && !sessionFolder) return null;
-        if (pluginFolder && sessionFolder) {
-            return 最后文件夹来源 === 'session' ? sessionFolder : pluginFolder;
-        }
-        return pluginFolder || sessionFolder;
-    }
+    let 当前视图模式 = 'chat'; // 'chat' | 'review'
+    let 审查结果缓存 = null;
 
     function 清除会话选择() {
         if (当前会话) {
             当前会话 = null;
             if (会话面板) 会话面板.clearSelection();
             msgArea.innerHTML = "";
+            msgArea.appendChild(el("div", { class: "nca-empty-state", text: "请先选择一个插件目录" }));
         }
     }
 
     function 更新状态栏() {
-        const effectiveFolder = 获取有效文件夹();
+        const effectiveFolder = 获取有效文件夹(当前会话, 最后文件夹来源);
         statusMain.textContent = effectiveFolder ? `已选择: ${effectiveFolder}` : '已选择: 无';
         if (会话面板折叠 && 当前会话) {
             const 标题 = 当前会话.title || "未命名";
@@ -69,7 +134,21 @@ export function 构建优化面板(panel, ctx) {
     }
     更新状态栏();
 
-    // ─── 主体区域：顶部会话列表（可折叠）+ 下方聊天区 ──────────────
+    // 创建选择器（现在可以安全调用获取有效文件夹了，当前会话 已初始化）
+    const selector = 创建文件夹选择器(null, () => 获取有效文件夹(当前会话, 最后文件夹来源), (folder) => {
+        if (!folder) {
+            Toast.warning("请先选择插件目录");
+            return;
+        }
+        const reviewBtn = selector.querySelector(".nc-folder-review-btn");
+        显示深度选择菜单(reviewBtn, async (depth) => {
+            await 触发代码审查(depth);
+        });
+    });
+    panel.appendChild(selector);
+    panel.appendChild(status);
+
+    // ─── 主体区域：双视图容器（chatView + reviewView） ──────────────
     const mainArea = el("div", {
         class: "nca-panel-main-area",
         style: {
@@ -82,6 +161,19 @@ export function 构建优化面板(panel, ctx) {
     });
     panel.appendChild(mainArea);
 
+    // 对话视图容器（包裹会话列表 + 聊天区）
+    const chatView = el("div", {
+        class: "nca-optimize-chat-view",
+        style: {
+            display: "flex",
+            flexDirection: "column",
+            flex: "1",
+            minHeight: "0",
+            overflow: "hidden",
+        },
+    });
+    mainArea.appendChild(chatView);
+
     // 顶部会话列表容器（竖向展开，与开发插件界面一致）
     const sidebarContainer = el("div", {
         class: "nca-optimize-sidebar",
@@ -92,9 +184,9 @@ export function 构建优化面板(panel, ctx) {
             flexDirection: "column",
         },
     });
-    mainArea.appendChild(sidebarContainer);
+    chatView.appendChild(sidebarContainer);
 
-    // 右侧内容区（Tab 容器）
+    // 聊天区（消息 + 模型栏 + 输入）
     const chatArea = el("div", {
         class: "nca-optimize-chat",
         style: {
@@ -105,11 +197,27 @@ export function 构建优化面板(panel, ctx) {
             overflow: "hidden",
         },
     });
-    mainArea.appendChild(chatArea);
+    chatView.appendChild(chatArea);
+
+    // 审查视图容器（初始隐藏，与 chatView 互斥显示）
+    const reviewView = el("div", {
+        class: "nca-optimize-review-view",
+        style: {
+            display: "none",
+            flexDirection: "column",
+            flex: "1",
+            minHeight: "0",
+            overflow: "hidden",
+        },
+    });
+    mainArea.appendChild(reviewView);
 
     // ─── 消息展示区 + 模型栏 ─────────────────────────────────
     const msgArea = el("div", { class: "nca-messages nc-optimize-messages", style: { flex: "1", overflowY: "auto", padding: "12px" } });
     chatArea.appendChild(msgArea);
+
+    // 空状态提示
+    msgArea.appendChild(el("div", { class: "nca-empty-state", text: "请先选择一个插件目录" }));
 
     // 模型切换栏
     const modelSwitcher = 创建模型切换栏副本(ctx);
@@ -143,31 +251,6 @@ export function 构建优化面板(panel, ctx) {
     });
 
     // ─── 创建会话列表面板（侧边栏） ──────────────────────────
-    /**
-     * 加载某会话的历史消息到 msgArea
-     */
-    async function 加载会话历史(sessionId) {
-        msgArea.innerHTML = "";
-        if (!sessionId) return;
-        try {
-            const res = await fetch(`${NCA_API_BASE}/sessions/${sessionId}/messages`);
-            if (!res.ok) return;
-            const data = await res.json();
-            const messages = data.messages || [];
-            messages.forEach(msg => {
-                const isUser = msg.role === "user";
-                const bubble = el("div", { class: `nca-msg ${isUser ? "nca-msg-user" : "nca-msg-ai"}` });
-                const body = el("div", { class: "nca-msg-content" });
-                body.innerHTML = isUser ? (msg.content || "") : 简易Markdown渲染(msg.content || "");
-                bubble.appendChild(body);
-                msgArea.appendChild(bubble);
-            });
-            msgArea.scrollTop = msgArea.scrollHeight;
-        } catch (e) {
-            console.warn("[节点梦工厂] 加载优化会话历史失败:", e);
-        }
-    }
-
     会话面板 = 创建会话列表面板({
         type: "optimize",
         container: sidebarContainer,
@@ -188,7 +271,12 @@ export function 构建优化面板(panel, ctx) {
             }
             当前会话 = session || null;
             更新状态栏();
-            加载会话历史(session?.id);
+            加载会话消息(session?.id, msgArea, {
+                input, sendBtn, msgArea, 附件,
+                activeTab: 'optimize',
+                getSessionId: () => 当前会话?.id || 会话面板.getCurrentSessionId(),
+                getPluginFolder: () => 获取有效文件夹(当前会话, 最后文件夹来源),
+            });
         },
         onSessionDelete: () => {
             // 如果删除后没有活跃会话，清空消息区
@@ -216,90 +304,208 @@ export function 构建优化面板(panel, ctx) {
         更新状态栏();
     });
 
+    // ─── 双视图切换 + 代码审查 + 开始优化 ──────────────────────
+    function 切换到审查视图(reviewData) {
+        审查结果缓存 = reviewData;
+        当前视图模式 = 'review';
+        reviewView.style.display = 'flex';
+        chatView.style.display = 'none';
+        reviewView.innerHTML = '';
+        渲染审查结果到面板(reviewData);
+    }
+
+    function 切换到对话视图() {
+        当前视图模式 = 'chat';
+        reviewView.style.display = 'none';
+        chatView.style.display = 'flex';
+    }
+
+    function 渲染审查结果到面板(reviewData) {
+        reviewView.innerHTML = "";
+
+        const reviewContent = el("div", {
+            class: "nca-review-content",
+            style: {
+                flex: "1",
+                overflowY: "auto",
+                padding: "16px",
+                minHeight: "0",
+            },
+        });
+        渲染审查结果(reviewData, reviewContent);
+        reviewView.appendChild(reviewContent);
+
+        const actionBar = el("div", {
+            class: "nca-review-action-bar",
+            style: {
+                display: "flex",
+                gap: "8px",
+                flexShrink: "0",
+                borderTop: "1px solid var(--nca-border, rgba(255,255,255,0.08))",
+                padding: "12px 16px",
+                background: "var(--nca-bg-secondary, #13131f)",
+            },
+        });
+
+        const backBtn = el("button", {
+            class: "nca-review-back-btn",
+            text: "← 返回对话",
+            style: {
+                padding: "6px 16px",
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: "6px",
+                color: "var(--nca-fg-dim, #9ca3af)",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontFamily: "var(--nca-font-mono, monospace)",
+                transition: "all 0.2s",
+            },
+        });
+        backBtn.addEventListener("mouseenter", () => {
+            backBtn.style.borderColor = "rgba(255,255,255,0.2)";
+            backBtn.style.color = "var(--nca-fg, #e5e7eb)";
+        });
+        backBtn.addEventListener("mouseleave", () => {
+            backBtn.style.borderColor = "rgba(255,255,255,0.1)";
+            backBtn.style.color = "var(--nca-fg-dim, #9ca3af)";
+        });
+        backBtn.addEventListener("click", () => 切换到对话视图());
+        actionBar.appendChild(backBtn);
+
+        const startBtn = el("button", {
+            class: "nca-review-start-optimize-btn",
+            text: "✨ 开始优化",
+            style: {
+                padding: "6px 20px",
+                background: "var(--nca-accent, #5b9fff)",
+                border: "none",
+                borderRadius: "6px",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontFamily: "var(--nca-font-mono, monospace)",
+                fontWeight: "600",
+                letterSpacing: "0.5px",
+                transition: "all 0.2s",
+                boxShadow: "0 0 12px rgba(91,159,255,0.2)",
+            },
+        });
+        startBtn.addEventListener("mouseenter", () => {
+            startBtn.style.filter = "brightness(1.15)";
+            startBtn.style.transform = "translateY(-1px)";
+        });
+        startBtn.addEventListener("mouseleave", () => {
+            startBtn.style.filter = "brightness(1)";
+            startBtn.style.transform = "translateY(0)";
+        });
+        startBtn.addEventListener("click", () => 开始优化());
+        actionBar.appendChild(startBtn);
+
+        reviewView.appendChild(actionBar);
+    }
+
+    async function 触发代码审查(depth) {
+        const folder = 获取有效文件夹(当前会话, 最后文件夹来源);
+        if (!folder) {
+            Toast.warning("请先选择插件目录");
+            return;
+        }
+
+        const reviewBtn = selector.querySelector(".nc-folder-review-btn");
+        if (reviewBtn) {
+            reviewBtn.disabled = true;
+            reviewBtn.innerHTML = '<span class="nca-review-loading-spinner"></span> 审查中...';
+        }
+
+        当前视图模式 = 'review';
+        reviewView.style.display = 'flex';
+        chatView.style.display = 'none';
+        reviewView.innerHTML = '<div class="nca-review-loading" style="display:flex;align-items:center;justify-content:center;gap:8px;padding:48px;color:var(--nca-fg-dim,#9ca3af);font-size:13px;"><div class="nca-loading-dot" style="width:6px;height:6px;border-radius:50%;background:var(--nca-accent,#5b9fff);animation:nca-loading-pulse 1.4s infinite ease-in-out;"></div><div class="nca-loading-dot" style="width:6px;height:6px;border-radius:50%;background:var(--nca-accent,#5b9fff);animation:nca-loading-pulse 1.4s infinite ease-in-out;animation-delay:0.2s;"></div><div class="nca-loading-dot" style="width:6px;height:6px;border-radius:50%;background:var(--nca-accent,#5b9fff);animation:nca-loading-pulse 1.4s infinite ease-in-out;animation-delay:0.4s;"></div><span>正在分析代码，请稍候...</span></div>';
+
+        try {
+            const review = await 执行代码审查(folder, depth);
+            切换到审查视图(review);
+        } catch (e) {
+            Toast.error(`审查失败: ${e.message || e}`);
+            切换到对话视图();
+        } finally {
+            if (reviewBtn) {
+                reviewBtn.disabled = false;
+                reviewBtn.innerHTML = '<span class="nca-review-icon">🔍</span> 代码审查';
+            }
+        }
+    }
+
+    async function 开始优化() {
+        if (!审查结果缓存) return;
+
+        const folder = 获取有效文件夹(当前会话, 最后文件夹来源);
+        if (!folder) {
+            Toast.warning('请先选择插件目录');
+            return;
+        }
+
+        // === 查找/创建关联会话 ===
+        try {
+            const sessions = await 获取会话列表('optimize');
+            const existing = sessions.find(s => s.plugin_folder === folder);
+
+            if (existing) {
+                // 已有关联会话，切换到它
+                if (会话面板 && 会话面板.setCurrentSessionId) {
+                    会话面板.setCurrentSessionId(existing.id);
+                }
+                当前会话 = existing;
+            } else {
+                // 没有关联会话，创建新的
+                const folderName = folder.split(/[\\/]/).pop();
+                const newSession = await 创建会话(`${folderName} 优化`, folder, 'optimize');
+                if (!newSession) {
+                    Toast.error('创建会话失败');
+                    return;
+                }
+                当前会话 = newSession;
+                if (会话面板) {
+                    await 会话面板.refresh();
+                    if (会话面板.setCurrentSessionId) {
+                        会话面板.setCurrentSessionId(newSession.id);
+                    }
+                }
+            }
+        } catch (e) {
+            Toast.error('准备会话失败: ' + e.message);
+            return;
+        }
+
+        // === 填充输入框 ===
+        // 格式化审查结果为消息文本
+        const message = 格式化审查为消息内容(审查结果缓存);
+
+        // 切换到对话视图
+        切换到对话视图();
+
+        // 将内容填充到输入框
+        input.value = message;
+        // 如果输入框是 textarea，自动调整高度
+        if (input.tagName === 'TEXTAREA') {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+        }
+        // 激活发送按钮
+        sendBtn.classList.add("active");
+        // 聚焦输入框
+        input.focus();
+    }
+
     // ─── 发送消息 ─────────────────────────────────────────────
     sendBtn.addEventListener('click', async () => {
-        const content = input.value.trim();
-        const 当前附件 = 附件.获取附件();
-        if (!content && 当前附件.length === 0) return;
-        const selectedPlugin = 获取有效文件夹();
-        // 硬性阻止：未选择插件目录时禁止发送
-        if (!selectedPlugin) {
-            Toast.warning("请先选择一个插件目录");
-            return;
-        }
-        // 确保有活跃会话
-        let sessionId = 会话面板.getCurrentSessionId();
-        if (!sessionId) {
-            Toast.warning("请先新建或选择一个会话");
-            return;
-        }
-        msgArea.appendChild(el("div", { class: "nca-msg nca-msg-user" }, [el("div", { class: "nca-msg-content", text: content || `[已附加 ${当前附件.length} 个文件]` })]));
-        input.value = '';
-        input.style.height = "auto";
-        附件.清空();
-        移除视觉能力警告(inputArea);
-        sendBtn.classList.remove("active");
-        msgArea.scrollTop = msgArea.scrollHeight;
-        // AI 回复气泡（流式渲染目标）
-        const aiBubble = el("div", { class: "nca-msg nca-msg-ai" });
-        const aiBody = el("div", { class: "nca-msg-content", html: '<span class="nca-streaming-cursor"></span>' });
-        aiBubble.appendChild(aiBody);
-        msgArea.appendChild(aiBubble);
-        msgArea.scrollTop = msgArea.scrollHeight;
-        try {
-            sendBtn.disabled = true;
-            const requestBody = {
-                message: content,
-                session_id: sessionId,
-                plugin_context: selectedPlugin,
-                model_source: 状态.模型来源 || 'api',
-                activeTab: 'optimize',
-            };
-            if (当前附件.length > 0) requestBody.attachments = 当前附件;
-            const response = await fetch(`${NCA_API_BASE}/chat-stream`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            });
-            if (!response.ok) {
-                let errorMsg = `HTTP ${response.status}`;
-                try { const errData = await response.json(); if (errData.error) errorMsg = errData.error; } catch (_) {}
-                throw new Error(errorMsg);
-            }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let fullContent = '';
-            let buffer = '';
-            let hasError = false;
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop();
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    try {
-                        const evt = JSON.parse(line.slice(6));
-                        if (evt.error) { hasError = true; fullContent += `\n⚠ 错误: ${evt.error}`; break; }
-                        if (evt.done) break;
-                        if (evt.content) {
-                            fullContent += evt.content;
-                            aiBody.innerHTML = 简易Markdown渲染(fullContent) + '<span class="nca-streaming-cursor"></span>';
-                            msgArea.scrollTop = msgArea.scrollHeight;
-                        }
-                    } catch (_) { /* 跳过无法解析的行 */ }
-                }
-                if (hasError) break;
-            }
-            aiBody.innerHTML = 简易Markdown渲染(fullContent || "（无回复）");
-        } catch (e) {
-            aiBody.innerHTML = '';
-            aiBubble.classList.remove('nca-msg-ai');
-            aiBubble.classList.add('nca-msg-system');
-            aiBody.textContent = `❌ 网络错误: ${e.message}`;
-        }
-        finally { sendBtn.disabled = false; msgArea.scrollTop = msgArea.scrollHeight; }
+        await 发送面板消息({
+            input, sendBtn, msgArea, 附件,
+            activeTab: 'optimize',
+            getSessionId: () => 当前会话?.id || 会话面板.getCurrentSessionId(),
+            getPluginFolder: () => 获取有效文件夹(当前会话, 最后文件夹来源),
+        });
     });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); } });
 }

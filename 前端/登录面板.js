@@ -128,6 +128,32 @@ export function 登出() {
     _ncaState.balanceAt  = 0;
 }
 
+// ─── 自动登录（从 RanKing 存储引导凭证并验证）────────────────
+// 返回 true 表示已登录或自动登录成功；false 表示需要手动登录
+export async function 自动登录() {
+    // 内存中已有有效凭证，直接返回
+    if (_ncaState.token && _ncaState.user) return true;
+
+    // 从 RanKing 存储读取凭证
+    const { token, user } = _读取RanKing凭证();
+    if (!token) return false;
+
+    // 调用后端验证 token 合法性与有效期
+    const r = await _本地调用(API_VERIFY_LOGIN, {
+        method: "POST",
+        body: { token },
+    });
+
+    if (r.ok && r.data && (r.data.valid === true || r.data.success === true || r.data.ok === true)) {
+        _ncaState.token      = token;
+        _ncaState.user       = r.data.user || user || { name: "RanKing 用户" };
+        _ncaState.verifiedAt = Date.now();
+        return true;
+    }
+
+    return false;
+}
+
 // ─── UI 主入口 ────────────────────────────────────
 export function 创建登录面板(container, opts) {
     const onEnter = opts && typeof opts.onEnter === 'function' ? opts.onEnter : null;

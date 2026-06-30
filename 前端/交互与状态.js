@@ -3,17 +3,8 @@
 // NodeCraft AI — Luxury Terminal Edition
 // ═══════════════════════════════════════════════════════════════
 
-import { NCA_STORAGE_KEYS, Toast } from "./工具函数.js";
+import { NCA_STORAGE_KEYS, Toast, 安全存储读 } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
-import { graphqlClient, GraphQLError } from "./graphql客户端.js";
-import { CHAT_STREAM } from "./graphql查询模板.js";
-
-// ─── GraphQL 迁移开关 ─────────────────────────────────────────
-// 默认关闭，所有 REST 调用保持不变；置 true 后流式聊天会改走 GraphQL Subscription。
-// 后续逐 API 迁移时，可在此扩展更多开关（如 USE_GRAPHQL_SESSIONS / USE_GRAPHQL_SETTINGS）。
-export let USE_GRAPHQL = false;
-export function 启用GraphQL(enabled = true) { USE_GRAPHQL = !!enabled; }
-export { graphqlClient };
 
 // ─── 事件总线 ───────────────────────────────────────────────────
 class 事件总线类 {
@@ -47,6 +38,11 @@ export const 事件 = {
     连接状态变更: "connection-state-changed",
     模型选择变更: "model-selection-changed",
     插件选择变更: "plugin-folder-changed",
+    上下文健康更新: "context-health-updated",
+    // 代码补全相关
+    代码补全请求: "nca:code-completion-request",
+    代码补全结果: "nca:code-completion-result",
+    代码补全状态: "nca:code-completion-status",
 };
 
 // ─── 全局状态 ─────────────────────────────────────────────────
@@ -75,7 +71,8 @@ export const 状态 = {
 // ─── HTTP 客户端封装 ──────────────────────────────────────────
 const API_BASE = "/ai-coder";
 // 默认 30 秒全局超时；流式请求可传 0 或更大值以放宽限制
-const 默认请求超时 = 30000;
+// 从设置中读取，设置未加载时用默认值 30000
+let 默认请求超时 = 30000;
 
 // ─── Token 安全存储 ───
 // Token key 名称保持 "ComfyCommunity_Token"（与 RanKing 平台一致）。
@@ -112,19 +109,6 @@ export function _获取Token() {
     return token;
 }
 
-export function _设置Token(token) {
-    _tokenCache = token || null;
-    try {
-        if (token) {
-            sessionStorage.setItem("ComfyCommunity_Token", token);
-        } else {
-            sessionStorage.removeItem("ComfyCommunity_Token");
-        }
-        // 注意：绝不删除 localStorage 中的 ComfyCommunity_Token
-        // 该键由 RanKing 插件管理，NCA 仅通过 sessionStorage 管理自己的会话副本
-    } catch (_) {}
-}
-
 // ─── CSRF 防护 ───
 // 为所有非 GET 请求注入 X-CSRF-Token 头；首次访问时本地生成并保存到 sessionStorage。
 function _获取或生成CsrfToken() {
@@ -154,7 +138,7 @@ function _生成幂等键() {
     return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function 请求(method, path, body = null, timeout = 默认请求超时, extraHeaders = null) {
+export async function 请求(method, path, body = null, timeout = 默认请求超时, extraHeaders = null) {
     const headers = { "Content-Type": "application/json" };
 
     // 注入 RanKing Token（如果已登录）
@@ -211,6 +195,7 @@ async function 请求(method, path, body = null, timeout = 默认请求超时, e
         if (e.message && (e.message.includes("Failed to fetch") || e.message.includes("NetworkError"))) {
             状态.连接状态 = "error";
             事件总线.emit(事件.连接状态变更, "error");
+            try { Toast.error("网络连接失败，请检查网络"); } catch (_) {}
         }
         throw e;
     } finally {
@@ -305,6 +290,7 @@ export async function 切换会话(id) {
 
     状态.当前会话ID = id;
     事件总线.emit(事件.会话切换, id);
+    事件总线.emit(事件.状态栏更新, "加载会话...");
     // 同步会话关联的插件文件夹：有则恢复，无则清空，确保"已选择"标签与会话状态严格一致
     const sess = (状态.会话列表 || []).find(s => s.id === id);
     设置插件文件夹(sess && sess.plugin_folder ? sess.plugin_folder : "");
@@ -437,44 +423,22 @@ export async function 发送消息(content, attachments = []) {
     状态.当前消息列表.push(用户消息);
     事件总线.emit(事件.新消息追加, 用户消息);
 
-    // ── GraphQL 可选路径（流式订阅）──
-    if (USE_GRAPHQL) {
-        try {
-            const AI回复 = await _发送消息_GraphQL(content);
-            事件总线.emit(事件.状态栏更新, "就绪");
-            return AI回复;
-        } catch (e) {
-            const 错误消息 = {
-                role: "assistant",
-                content: `⚠ GraphQL 请求失败: ${e.message}`,
-                timestamp: Date.now(),
-            };
-            状态.当前消息列表.push(错误消息);
-            事件总线.emit(事件.新消息追加, 错误消息);
-            事件总线.emit(事件.状态栏更新, "错误");
-            状态.连接状态 = "error";
-            事件总线.emit(事件.连接状态变更, "error");
-            return null;
-        } finally {
-            状态.正在发送 = false;
-            事件总线.emit(事件.发送状态变更, false);
-        }
-    }
-
     try {
         const requestBody = {
             message: content,
             session_id: 状态.当前会话ID,
             model_source: 状态.模型来源,
             local_model_name: 状态.选中本地模型 || "",
-            plugin_context: localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "",
-            activeTab: localStorage.getItem(NCA_STORAGE_KEYS.activeTab) || "develop",
+            plugin_context: 安全存储读(NCA_STORAGE_KEYS.plugin),
+            activeTab: 安全存储读(NCA_STORAGE_KEYS.activeTab, "develop"),
         };
         if (attachments.length > 0) {
             requestBody.attachments = attachments;
         }
+        // 聊天请求使用 chat_timeout（默认 120 秒），避免长回复被 30 秒默认超时截断
+        const chatTimeout = 状态.设置?.chat_timeout || 默认请求超时;
         // M8: 幂等性保证 — 为聊天请求附加幂等键，避免网络重试或快速点击导致的重复提交
-        const data = await 请求("POST", "/chat", requestBody, 默认请求超时, {
+        const data = await 请求("POST", "/chat", requestBody, chatTimeout, {
             "X-Idempotency-Key": _生成幂等键(),
         });
 
@@ -505,63 +469,13 @@ export async function 发送消息(content, attachments = []) {
     }
 }
 
-// ─── GraphQL 流式聊天（USE_GRAPHQL 开启时使用）──────────────────
-// 通过 graphql-ws Subscription 接收逐 token 推送，并在结束时合并为完整 AI 回复对象。
-function _发送消息_GraphQL(content) {
-    return new Promise((resolve, reject) => {
-        const variables = {
-            会话ID: 状态.当前会话ID,
-            消息内容: content,
-            插件上下文: localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "",
-            模型来源: 状态.模型来源 || "",
-        };
-
-        // 占位 AI 消息：边收边渲染
-        const AI回复 = { role: "assistant", content: "", timestamp: Date.now() };
-        状态.当前消息列表.push(AI回复);
-        事件总线.emit(事件.新消息追加, AI回复);
-
-        let unsubscribe = null;
-        unsubscribe = graphqlClient.subscribe(CHAT_STREAM, variables, {
-            onData: (data) => {
-                try {
-                    const 事件数据 = data?.聊天流;
-                    if (!事件数据) return;
-                    if (事件数据.内容) {
-                        AI回复.content += 事件数据.内容;
-                        // 复用现有事件机制：消息列表已变更，触发渲染层增量刷新
-                        事件总线.emit(事件.消息列表更新, 状态.当前消息列表);
-                    }
-                    if (事件数据.完成) {
-                        if (typeof unsubscribe === "function") unsubscribe();
-                        // 流结束时过滤 tool_call 标记，作为安全保障
-                        AI回复.content = _过滤工具标记(AI回复.content);
-                        resolve(AI回复);
-                    }
-                } catch (err) {
-                    console.error("[节点梦工厂] GraphQL订阅处理异常:", err);
-                    if (typeof unsubscribe === "function") unsubscribe();
-                    reject(err);
-                }
-            },
-            onError: (err) => {
-                if (typeof unsubscribe === "function") unsubscribe();
-                reject(err instanceof GraphQLError ? err : new Error(err?.message || String(err)));
-            },
-            onComplete: () => {
-                // 服务端已 complete 但未发送过 完成=True 的事件 → 视作正常结束
-                AI回复.content = _过滤工具标记(AI回复.content);
-                resolve(AI回复);
-            },
-        });
-    });
-}
-
 // ─── 设置 API ─────────────────────────────────────────────────
 export async function 加载设置() {
     try {
         const data = await 请求("GET", "/settings");
         Object.assign(状态.设置, data);
+        // 从设置同步超时配置（设置未加载时用默认值）
+        默认请求超时 = 状态.设置.request_timeout || 30000;
         // 从持久化的设置同步模型选择到全局状态字段（重启后恢复用户上次选择）
         状态.模型来源 = 状态.设置.model_source || "api";
         状态.选中本地模型 = 状态.设置.local_model_name || "";
@@ -589,6 +503,8 @@ export async function 保存设置(settings) {
     try {
         await 请求("POST", "/settings", settings);
         Object.assign(状态.设置, settings);
+        // 同步超时配置（若保存的设置中包含超时字段）
+        if (settings.request_timeout !== undefined) 默认请求超时 = settings.request_timeout || 30000;
         // 当保存包含模型字段时，同步全局状态，避免设置面板等其他入口造成状态不一致
         if (settings.model_source !== undefined) 状态.模型来源 = settings.model_source;
         if (settings.local_model_name !== undefined) 状态.选中本地模型 = settings.local_model_name;
@@ -691,12 +607,9 @@ export async function 创建插件文件夹(pluginName) {
 
 // ─── 本地模型 API ─────────────────────────────────────────────
 export async function 获取本地模型列表() {
-    console.log("[节点梦工厂][诊断] 发起获取本地模型列表请求...");
     try {
         const data = await 请求("GET", "/local-models");
-        console.log("[节点梦工厂][诊断] 响应数据:", data);
         状态.本地模型列表 = data.models || [];
-        console.log("[节点梦工厂][诊断] 本地模型列表长度:", 状态.本地模型列表.length);
         return 状态.本地模型列表;
     } catch (e) {
         console.error("[节点梦工厂][诊断] 获取本地模型列表失败:", e);
@@ -715,7 +628,7 @@ export async function 获取本地插件列表() {
     }
 }
 
-export async function 浏览文件夹(initialDir = "") {
+async function 浏览文件夹(initialDir = "") {
     try {
         const data = await 请求("POST", "/browse-folder", { initial_dir: initialDir });
         return data.folders || [];
@@ -794,13 +707,80 @@ export function 格式化时间(timestamp) {
  * - AbortError：用户主动取消，不重连
  * - TypeError / NetworkError / Failed to fetch：判为网络问题，可重连
  */
-export function 是可重连错误(err) {
-    if (!err) return false;
-    if (err.name === 'AbortError') return false;
-    if (err.name === 'TypeError') return true;
-    const msg = String(err.message || '').toLowerCase();
-    return msg.includes('failed to fetch')
-        || msg.includes('network')
-        || msg.includes('econnreset')
-        || msg.includes('load failed');
+export function 是可重连错误(error) {
+    if (!error) return false;
+    const msg = String(error.message || error);
+    // 用户主动取消不重试
+    if (error.name === 'AbortError') return false;
+    // 网络级错误
+    if (error instanceof TypeError) return true;
+    // 网络错误关键词
+    if (msg.includes('Failed to fetch') || 
+        msg.includes('NetworkError') || 
+        msg.includes('ECONNRESET') || 
+        msg.includes('Load failed')) return true;
+    // HTTP 5xx 服务器临时错误
+    if (/\b5\d{2}\b/.test(msg)) return true;
+    return false;
 }
+
+// ===== 上下文健康度指示器 =====
+function _创建上下文指示器() {
+    // 找到状态栏右侧区域
+    const statusRight = document.querySelector('.status-right');
+    if (!statusRight) return;
+
+    // 避免重复创建
+    if (document.querySelector('.nca-context-indicator')) return;
+
+    // 创建分隔符
+    const separator = document.createElement('span');
+    separator.className = 'status-separator';
+    separator.textContent = '|';
+
+    // 创建指示器容器
+    const indicator = document.createElement('span');
+    indicator.className = 'nca-context-indicator';
+    indicator.title = '上下文使用率';
+    indicator.innerHTML = `
+        <span class="context-bar-bg">
+            <span class="context-bar-fill"></span>
+        </span>
+        <span class="context-text">0%</span>
+    `;
+
+    statusRight.appendChild(separator);
+    statusRight.appendChild(indicator);
+}
+
+// DOM 就绪后创建指示器
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _创建上下文指示器);
+} else {
+    // 延迟确保状态栏已渲染
+    setTimeout(_创建上下文指示器, 500);
+}
+
+// 监听上下文健康度更新
+事件总线.on('context-health-updated', (data) => {
+    // 确保指示器存在
+    _创建上下文指示器();
+
+    const fill = document.querySelector('.context-bar-fill');
+    const text = document.querySelector('.context-text');
+    if (!fill || !text) return;
+
+    const percent = Math.min(data.usage_percent || 0, 100);
+    fill.style.width = `${percent}%`;
+    text.textContent = `${Math.round(percent)}%`;
+
+    // 设置级别颜色
+    fill.className = 'context-bar-fill';
+    if (percent >= 95) {
+        fill.classList.add('level-critical');
+    } else if (percent >= 85) {
+        fill.classList.add('level-warning');
+    } else if (percent >= 70) {
+        fill.classList.add('level-info');
+    }
+});
