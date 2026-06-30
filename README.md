@@ -37,7 +37,10 @@ NodeCraft AI 的做法不同：我们针对 ComfyUI 插件开发场景，配备�
 
 ## 📸 界面预览
 
-![界面预览](./assets/preview.png)
+<img width="325" height="605" alt="01" src="https://github.com/user-attachments/assets/1ef03efd-90ff-4bf3-a965-28963af3e021" />
+<img width="325" height="605" alt="02" src="https://github.com/user-attachments/assets/e570f46a-4b84-4ce7-8146-9110aea4a307" />
+<img width="325" height="605" alt="03" src="https://github.com/user-attachments/assets/3711caa6-1d2e-4af2-9b36-94f0eb7133d7" />
+
 
 ---
 
