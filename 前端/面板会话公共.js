@@ -318,6 +318,7 @@ export async function 发送面板消息(options) {
                     aiBody.textContent = `❌ 网络错误`;
                 } else if (hasError) {
                     aiBody.innerHTML = 简易Markdown渲染(内容);
+                    绑定代码块复制按钮(aiBubble);
                 } else {
                     aiBody.innerHTML = 简易Markdown渲染(内容);
                     绑定代码块复制按钮(aiBubble);
