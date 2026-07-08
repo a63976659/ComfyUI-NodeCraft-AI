@@ -260,6 +260,13 @@ export async function 发送面板消息(options) {
             数据处理: (data, 状态引用) => {
                 // ── 上下文健康度指标 - 不渲染为聊天消息 ──
                 if (data.type === 'context_health') {
+                    if (data.warning) {
+                        if (data.usage_percent >= 95) {
+                            Toast.error(`上下文已满 (${data.usage_percent}%)，建议新建会话以获得最佳体验`);
+                        } else if (data.usage_percent >= 85) {
+                            Toast.warning(`上下文使用率较高 (${data.usage_percent}%)，复杂任务建议新建会话`);
+                        }
+                    }
                     return 'skip';
                 }
                 // ── 知识库检索状态 - 改为侧边栏常驻通知条，不渲染为聊天消息 ──

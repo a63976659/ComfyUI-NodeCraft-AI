@@ -36,12 +36,16 @@ export function 创建模型切换栏副本(ctx) {
     const unloadBtn = el("button", { class: "nca-unload-btn", text: "释放显存", title: "卸载本地模型，释放显存/内存" });
     unloadBtn.style.display = 状态.模型来源 === "local" ? "" : "none";
     const aSel = el("select", { class: "nca-model-select nca-api-model-select" }); aSel.style.display = 状态.模型来源 === "api" ? "" : "none"; aSel.title = "选择 API 模型";
-    bar.appendChild(lSel); bar.appendChild(unloadBtn); bar.appendChild(aSel);
+    // 免费模型徽章：淡蓝色图标，select 框右侧
+    const freeBadge = el("span", { class: "nca-free-badge", text: "免费" });
+    freeBadge.style.display = "none";
+    bar.appendChild(lSel); bar.appendChild(unloadBtn); bar.appendChild(aSel); bar.appendChild(freeBadge);
 
     // 用占位选项设置 API 下拉框的单一提示态（加载中 / 未配置 / 云端不可达）
     function 设置API占位(文本) {
         aSel.innerHTML = "";
         const o = el("option", { value: "", text: 文本 }); o.disabled = true; o.selected = true; aSel.appendChild(o);
+        freeBadge.style.display = "none";
     }
     // 从云端加载 API 模型列表并填充下拉框，处理未配置/加载/错误三种状态
     async function 刷新API下拉() {
@@ -53,6 +57,12 @@ export function 创建模型切换栏副本(ctx) {
         const 加载成功 = Array.from(aSel.options).some(o => o.value);
         if (!加载成功) 设置API占位("云端不可达");
         else if (状态.设置.model_name) aSel.value = 状态.设置.model_name;
+        刷新免费徽章();
+    }
+    // 根据当前选中选项切换免费徽章显示
+    function 刷新免费徽章() {
+        const sel = aSel.options[aSel.selectedIndex];
+        freeBadge.style.display = (sel && sel.dataset.isFree === "true") ? "" : "none";
     }
 
     function refresh() {
@@ -61,6 +71,7 @@ export function 创建模型切换栏副本(ctx) {
         lSel.style.display = 状态.模型来源 === "local" ? "" : "none";
         unloadBtn.style.display = 状态.模型来源 === "local" ? "" : "none";
         aSel.style.display = 状态.模型来源 === "api" ? "" : "none";
+        freeBadge.style.display = 状态.模型来源 === "api" ? freeBadge.style.display : "none";
         lSel.innerHTML = "";
         if (状态.本地模型列表.length === 0) { const o = el("option", { value: "", text: "未检测到本地模型" }); o.disabled = true; lSel.appendChild(o); }
         else { 状态.本地模型列表.forEach(m => { const o = el("option", { value: m.name, text: m.name }); if (m.name === 状态.选中本地模型) o.selected = true; lSel.appendChild(o); }); }
@@ -70,7 +81,7 @@ export function 创建模型切换栏副本(ctx) {
     lBtn.addEventListener("click", async () => { await 更新模型选择({ 模型来源: "local" }); });
     aBtn.addEventListener("click", async () => { await 更新模型选择({ 模型来源: "api" }); });
     lSel.addEventListener("change", async () => { await 更新模型选择({ 选中本地模型: lSel.value }); });
-    aSel.addEventListener("change", async () => { if (!aSel.value) return; await 更新模型选择({ API模型名: aSel.value }); });
+    aSel.addEventListener("change", async () => { if (!aSel.value) return; await 更新模型选择({ API模型名: aSel.value }); 刷新免费徽章(); });
     unloadBtn.addEventListener("click", async () => {
         if (unloadBtn.disabled) return;
         const 原文本 = unloadBtn.textContent;

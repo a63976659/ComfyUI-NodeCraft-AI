@@ -9,10 +9,9 @@ import {
 import { 事件总线, 事件, 设置插件文件夹, 获取会话列表, 创建会话 } from "./交互与状态.js";
 import { 加载可视化库, 是否已加载可视化库, 创建可视化图, 销毁图, formatSize } from "./可视化引擎.js";
 import { 创建文件夹选择器 } from "./文件夹选择器.js";
-import { 创建附件组件 } from "./附件上传组件.js";
 import { 创建模型切换栏副本 } from "./插件开发面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
-import { 获取有效文件夹, 加载会话消息, 发送面板消息 } from "./面板会话公共.js";
+import { 获取有效文件夹, 加载会话消息, 发送面板消息, 创建面板输入区, 绑定输入事件 } from "./面板会话公共.js";
 import { 执行代码审查, 渲染审查结果, 显示审查深度下拉菜单, 格式化审查为消息内容 } from "./代码审查面板.js";
 
 // ─── 演示数据（含 normal/error/warning 三种状态） ──────────
@@ -492,22 +491,8 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     const modelSwitcher = 创建模型切换栏副本(ctx);
     contentArea.appendChild(modelSwitcher);
 
-    const vizInputArea = el("div", { class: "nca-input-area" });
-    const vizInputWrapper = el("div", { class: "nca-input-wrapper" });
-    const vizInput = el("textarea", { rows: "1", placeholder: "询问关于此插件的问题..." });
-    const vizSendBtn = el("button", { class: "nca-send-btn", html: "▶", title: "发送" });
-
-    const viz附件 = 创建附件组件(panel, () => {
-        vizSendBtn.classList.toggle("active", vizInput.value.trim().length > 0 || viz附件.有附件());
-    });
-    viz附件.设置输入区(vizInputArea);
-    vizInputArea.appendChild(viz附件.预览区);
-
-    vizInputWrapper.appendChild(viz附件.文件按钮);
-    vizInputWrapper.appendChild(viz附件.文件输入);
-    vizInputWrapper.appendChild(vizInput);
-    vizInputWrapper.appendChild(vizSendBtn);
-    vizInputArea.appendChild(vizInputWrapper);
+    // 输入区域（复用面板公共组件）
+    const { inputArea: vizInputArea, input: vizInput, sendBtn: vizSendBtn, 附件: viz附件 } = 创建面板输入区(panel, { placeholder: "询问关于此插件的问题..." });
     contentArea.appendChild(vizInputArea);
 
     // ─── 审查视图容器（内嵌显示，初始隐藏） ──────────────────────
@@ -522,13 +507,6 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         },
     });
     contentArea.appendChild(reviewView);
-
-    vizInput.addEventListener("input", () => {
-        vizInput.style.height = "auto";
-        vizInput.style.height = Math.min(vizInput.scrollHeight, 100) + "px";
-        vizSendBtn.classList.toggle("active", vizInput.value.trim().length > 0 || viz附件.有附件());
-    });
-
 
     // ─── 状态栏 / 按钮辅助 ───────────────────────────────────
     function 更新状态栏(stats) {
@@ -1201,7 +1179,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     });
 
     // ─── 输入区交互：发送问答（SSE 流式，必须选择插件目录） ────────────────────────────
-    vizSendBtn.addEventListener('click', async () => {
+    绑定输入事件(vizInput, vizSendBtn, viz附件, async () => {
         await 发送面板消息({
             input: vizInput,
             sendBtn: vizSendBtn,
@@ -1218,11 +1196,5 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
                 }
             },
         });
-    });
-    vizInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            vizSendBtn.click();
-        }
     });
 }

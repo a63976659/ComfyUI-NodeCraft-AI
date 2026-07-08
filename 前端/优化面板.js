@@ -8,11 +8,10 @@ import {
 } from "./工具函数.js";
 import { 事件总线, 事件, 设置插件文件夹, 获取会话列表, 创建会话 } from "./交互与状态.js";
 import { 创建文件夹选择器 } from "./文件夹选择器.js";
-import { 创建附件组件 } from "./附件上传组件.js";
 import { 创建模型切换栏副本 } from "./插件开发面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
 import { 执行代码审查, 渲染审查结果, 格式化审查为消息内容, 显示审查深度下拉菜单 } from "./代码审查面板.js";
-import { 获取有效文件夹, 加载会话消息, 发送面板消息 } from "./面板会话公共.js";
+import { 获取有效文件夹, 加载会话消息, 发送面板消息, 创建面板输入区, 绑定输入事件 } from "./面板会话公共.js";
 
 /**
  * 构建"优化插件"面板
@@ -163,32 +162,9 @@ export function 构建优化面板(panel, ctx) {
     const modelSwitcher = 创建模型切换栏副本(ctx);
     chatArea.appendChild(modelSwitcher);
 
-    // 输入区域
-    const inputArea = el("div", { class: "nca-input-area" });
-    const inputWrapper = el("div", { class: "nca-input-wrapper" });
-    const input = el("textarea", { rows: "1", placeholder: "描述你想要优化的内容..." });
-    const sendBtn = el("button", { class: "nca-send-btn", html: "▶", title: "发送" });
-
-    // 附件上传组件
-    const 附件 = 创建附件组件(panel, () => {
-        sendBtn.classList.toggle("active", input.value.trim().length > 0 || 附件.有附件());
-    });
-    附件.设置输入区(inputArea);
-    inputArea.appendChild(附件.预览区);
-
-    inputWrapper.appendChild(附件.文件按钮);
-    inputWrapper.appendChild(附件.文件输入);
-    inputWrapper.appendChild(input);
-    inputWrapper.appendChild(sendBtn);
-    inputArea.appendChild(inputWrapper);
+    // 输入区域（复用面板公共组件）
+    const { inputArea, input, sendBtn, 附件 } = 创建面板输入区(panel, { placeholder: "描述你想要优化的内容..." });
     chatArea.appendChild(inputArea);
-
-    // 自适应高度 + 激活态
-    input.addEventListener("input", () => {
-        input.style.height = "auto";
-        input.style.height = Math.min(input.scrollHeight, 100) + "px";
-        sendBtn.classList.toggle("active", input.value.trim().length > 0 || 附件.有附件());
-    });
 
     // ─── 创建会话列表面板（侧边栏） ──────────────────────────
     会话面板 = 创建会话列表面板({
@@ -439,7 +415,7 @@ export function 构建优化面板(panel, ctx) {
     }
 
     // ─── 发送消息 ─────────────────────────────────────────────
-    sendBtn.addEventListener('click', async () => {
+    绑定输入事件(input, sendBtn, 附件, async () => {
         await 发送面板消息({
             input, sendBtn, msgArea, 附件,
             activeTab: 'optimize',
@@ -455,5 +431,4 @@ export function 构建优化面板(panel, ctx) {
             },
         });
     });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); } });
 }
