@@ -164,13 +164,25 @@ async def handle_model_capabilities(request):
         model_source = request.query.get("model_source") or settings.get("model_source", "api")
         model_name = request.query.get("model_name") or settings.get("model_name", "")
 
+        # 本地模式下，用 local_model_name 兜底（API 模式用 model_name）
+        if model_source == "local" and not model_name:
+            model_name = settings.get("local_model_name", "") or model_name
+
         supports_vision = False
         if model_source == "api" and model_name:
-            # 复用模型客户端的检测逻辑
+            # API 模型：复用模型客户端的检测逻辑
             try:
                 if llm_client is not None:
                     llm_client.当前模型名 = model_name
                     supports_vision = llm_client._supports_vision()
+            except Exception:
+                supports_vision = False
+        elif model_source == "local":
+            # 本地模型：检测当前加载的模型是否为多模态视觉模型
+            # 传入 model_name 以支持离线检测（模型未加载时读 config.json）
+            try:
+                if local_model_client is not None:
+                    supports_vision = local_model_client._supports_vision(model_name)
             except Exception:
                 supports_vision = False
 

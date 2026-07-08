@@ -11,8 +11,7 @@
 
 日志格式：[时间][级别][模块] 消息
 日志层次：所有日志归属 NodeCraftAI 命名空间，避免污染 ComfyUI 主日志。
-日志级别：仅输出 WARNING 及以上级别（警告和错误），日常 INFO/DEBUG 不输出，
-保持控制台简洁，不产生文件日志。
+日志输出：控制台 INFO+（错误和异常显示在 ComfyUI 后端日志中）
 """
 import logging
 import sys
@@ -34,22 +33,22 @@ def 初始化日志系统() -> None:
     """初始化全局日志配置
 
     应在应用启动时调用一次。重复调用会被忽略以避免重复 handler。
+    所有日志输出到控制台（INFO+），错误和异常显示在 ComfyUI 后端日志中。
     """
     root_logger = logging.getLogger("NodeCraftAI")
     if root_logger.handlers:
         return  # 已初始化
 
-    root_logger.setLevel(logging.WARNING)
+    root_logger.setLevel(logging.INFO)
     # 防止日志冒泡到根 logger 引起重复输出
     root_logger.propagate = False
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.WARNING)
-
-    formatter = logging.Formatter(
+    # 控制台 handler：INFO+，输出到 ComfyUI 后端日志
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
         '[%(asctime)s][%(levelname)s][%(name)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
+    ))
+    root_logger.addHandler(console_handler)
 

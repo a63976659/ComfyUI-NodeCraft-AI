@@ -410,8 +410,9 @@ async def _build_chat_context(request, session_id, message, attachments=None, pl
             logger.debug(f"跨会话记忆注入失败（忽略）: {e}")
 
     # 7. 压缩上下文（LLM 摘要模式：需提前确定模型来源和客户端，settings 已在步骤 4.1 加载）
+    # 本地模型不使用 LLM 摘要（_生成LLM摘要 中已防御），此处也确保不传递 local_model_client
     model_source = data.get("model_source") or settings.get("model_source", "api")
-    _compress_llm_client = local_model_client if model_source == "local" else llm_client
+    _compress_llm_client = None if model_source == "local" else llm_client
     context_mgr = ContextManager()
     history_to_send = await context_mgr.compress_history(
         session_data["messages"],
@@ -428,6 +429,26 @@ async def _build_chat_context(request, session_id, message, attachments=None, pl
         a for a in attachments
         if a.get("type", "").startswith("image/") and a.get("data")
     ]
+    # 本地模型视觉能力前置检查：不支持视觉的模型不注入图片附件，避免 Worker 推理崩溃
+    if image_attachments and model_source == "local" and local_model_client is not None:
+        _local_model_name = settings.get("local_model_name", "")
+        try:
+            _supports_vision = local_model_client._supports_vision(_local_model_name)
+            logger.info(
+                f"[视觉检测] model_name={_local_model_name!r}, "
+                f"_supports_vision={_supports_vision}, "
+                f"client._is_multimodal={getattr(local_model_client, '_is_multimodal', 'N/A')}, "
+                f"image_count={len(image_attachments)}"
+            )
+        except Exception as e:
+            logger.warning(f"[视觉检测] 本地模型视觉能力检测异常（按不支持处理）: {e}")
+            _supports_vision = False
+        if not _supports_vision:
+            logger.warning(f"[视觉检测] 本地模型 {_local_model_name} 不支持图片分析，已跳过图片附件")
+            # 在用户消息中追加提示，避免用户以为图片被模型处理了
+            _img_names = ", ".join(a.get("name", "图片") for a in image_attachments)
+            full_message += f"\n\n[注意: 当前本地模型不支持图片分析，已忽略图片附件: {_img_names}]"
+            image_attachments = []
     if (image_attachments or attachment_descriptions) and history_to_send:
         last_user_idx = None
         for i in range(len(history_to_send) - 1, -1, -1):
