@@ -410,7 +410,7 @@ function _渲染Profile(host, onEnter) {
     const valueEl = el("div", { class: "nc-wallet-value loading", text: "加载中…" });
     wallet.appendChild(valueEl);
 
-    // 余额详情行：积分换算 + 预估可用次数
+    // 余额详情行：积分换算
     const detailEl = el("div", {
         class: "nc-wallet-detail",
         style: {
@@ -577,19 +577,14 @@ function _渲染余额(scope) {
     }
     unit.textContent = currency;
 
-    // 积分换算 + 预估可用次数
+    // 积分换算
     if (detailEl) {
-        const parts = [];
         if (Number.isFinite(num)) {
             const credits = (num / tpc).toFixed(2);
-            parts.push(`≈ ${credits} 积分`);
-            // 预估可用对话次数（按每次约消耗 4000 token 估算）
-            if (num > 0) {
-                const estCalls = Math.floor(num / 4000);
-                parts.push(`≈ ${estCalls.toLocaleString()} 次对话`);
-            }
+            detailEl.textContent = `≈ ${credits} 积分`;
+        } else {
+            detailEl.textContent = "";
         }
-        detailEl.textContent = parts.join(" · ");
         detailEl.style.color = (Number.isFinite(num) && num <= lowThreshold)
             ? "var(--nca-warn, #f59e0b)"
             : "var(--nca-fg-dim, #a0a0b8)";
@@ -944,7 +939,7 @@ async function _显示充值对话框(scope) {
     }
     pricingBox.appendChild(el("div", {
         style: { marginTop: "6px", fontSize: "10px", color: "var(--nca-accent, #6c5ce7)" },
-        text: "※ 标有[免费]的模型不扣费，基础会员可用",
+        text: "※ 带蓝色「免费」徽章的模型不扣费，基础会员可用",
     }));
     dialog.appendChild(pricingBox);
 

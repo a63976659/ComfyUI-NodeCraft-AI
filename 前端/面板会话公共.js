@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import {
-    el, NCA_API_BASE, NCA_STORAGE_KEYS, 简易Markdown渲染, 移除视觉能力警告, Toast, 安全存储读, 工具名显示,
+    el, NCA_API_BASE, NCA_STORAGE_KEYS, 简易Markdown渲染, 移除视觉能力警告, Toast, 安全存储读, 工具名显示, 追加附件缩略图,
 } from "./工具函数.js";
 import { 状态, 事件总线, 事件, 创建消耗信息DOM, 检查余额, 获取会话列表, 创建会话 } from "./交互与状态.js";
 import { 创建流式聊天 } from "./流式聊天管理器.js";
@@ -80,6 +80,10 @@ export async function 加载会话消息(sessionId, msgArea, options = {}) {
             body.innerHTML = 简易Markdown渲染(msg.content || "");
             bubble.appendChild(body);
             bubble._原始内容 = msg.content || "";
+            // 用户消息附带附件图片缩略图
+            if (isUser && msg.attachments && msg.attachments.length > 0) {
+                追加附件缩略图(body, msg.attachments);
+            }
             if (!isUser) 绑定代码块复制按钮(bubble);
             msgArea.appendChild(bubble);
         });
@@ -177,6 +181,10 @@ export async function 发送面板消息(options) {
         const userBody = el("div", { class: "nca-msg-body" });
         userBody.innerHTML = 简易Markdown渲染(content || `[已附加 ${当前附件.length} 个文件]`);
         userBubble.appendChild(userBody);
+        // 用户消息附带附件图片缩略图
+        if (当前附件.length > 0) {
+            追加附件缩略图(userBody, 当前附件);
+        }
         userBubble._原始内容 = content || "";
         userBubble._消息索引 = 来自编辑 ? truncate_at : 当前消息数;
         const editBtn = userBubble.querySelector(".nca-msg-edit-btn");
@@ -309,7 +317,8 @@ export async function 发送面板消息(options) {
                 }
                 // 显示本次消耗
                 if (billing) {
-                    aiBubble.appendChild(创建消耗信息DOM(billing.cost, billing.balance));
+                    const billingDOM = 创建消耗信息DOM(billing.cost, billing.balance);
+                    if (billingDOM) aiBubble.appendChild(billingDOM);
                 }
             },
         });

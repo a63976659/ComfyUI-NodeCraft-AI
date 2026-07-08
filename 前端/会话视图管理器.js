@@ -608,13 +608,28 @@ export function renderSidebarUI(container) {
             title: "卸载本地模型，释放显存/内存",
         });
         释放显存按钮.style.display = 状态.模型来源 === "local" ? "" : "none";
-        // API 模型下拉框：与本地下拉框同款样式，直接在底部栏切换 API 模型，无需进入设置面板
+        // API 模型下拉框：原生 select + 右侧淡蓝色免费徽章
         const API下拉 = el("select", { class: "nca-model-select nca-api-model-select" });
         API下拉.style.display = 状态.模型来源 === "api" ? "" : "none";
         API下拉.title = "选择 API 模型";
+        // 免费模型徽章：淡蓝色图标，select 框右侧
+        const 免费徽章 = el("span", { class: "nca-free-badge", text: "免费" });
+        免费徽章.style.display = "none";
         切换栏.appendChild(本地下拉);
         切换栏.appendChild(释放显存按钮);
         切换栏.appendChild(API下拉);
+        切换栏.appendChild(免费徽章);
+
+        // 根据当前选中选项切换免费徽章显示
+        function 刷新免费徽章() {
+            const sel = API下拉.options[API下拉.selectedIndex];
+            if (sel && sel.dataset.isFree === "true") {
+                免费徽章.style.display = "";
+            } else {
+                免费徽章.style.display = "none";
+            }
+        }
+        API下拉.addEventListener("change", 刷新免费徽章);
 
         // 用占位选项设置下拉框的单一提示态（加载中 / 未配置 / 云端不可达）
         function 设置API占位(文本) {
@@ -622,6 +637,7 @@ export function renderSidebarUI(container) {
             const opt = el("option", { value: "", text: 文本 });
             opt.disabled = true; opt.selected = true;
             API下拉.appendChild(opt);
+            免费徽章.style.display = "none";
         }
 
         function 刷新本地下拉() {
@@ -651,6 +667,7 @@ export function renderSidebarUI(container) {
             } else if (状态.设置.model_name) {
                 API下拉.value = 状态.设置.model_name;
             }
+            刷新免费徽章();
         }
         function 更新模型选择UI() {
             本地按钮.className = `nca-switch-btn ${状态.模型来源 === "local" ? "active" : ""}`;
@@ -658,6 +675,7 @@ export function renderSidebarUI(container) {
             本地下拉.style.display = 状态.模型来源 === "local" ? "" : "none";
             释放显存按钮.style.display = 状态.模型来源 === "local" ? "" : "none";
             API下拉.style.display = 状态.模型来源 === "api" ? "" : "none";
+            免费徽章.style.display = 状态.模型来源 === "api" ? 免费徽章.style.display : "none";
             刷新本地下拉();
             // 仅在 API 模式下拉取/刷新云端模型列表，避免本地模式下无谓请求
             if (状态.模型来源 === "api") 刷新API下拉();

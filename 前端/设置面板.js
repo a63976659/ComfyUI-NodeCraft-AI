@@ -188,9 +188,8 @@ export async function 加载云端模型列表(selectEl, settings) {
                 for (const m of groups[provName]) {
                     const opt = document.createElement("option");
                     opt.value = m.id;
-                    opt.textContent = m.name;
-                    if (m.is_default) opt.textContent = "★ " + opt.textContent;
-                    if (m.is_free) opt.textContent += " [免费]";
+                    opt.textContent = (m.is_default ? "★ " : "") + m.name;
+                    if (m.is_free) opt.dataset.isFree = "true";
                     if (m.enabled === false) {
                         opt.disabled = true;
                         opt.textContent += " [未启用]";

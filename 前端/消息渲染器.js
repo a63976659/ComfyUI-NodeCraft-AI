@@ -5,7 +5,7 @@
 
 import {
     el, 简易Markdown渲染, 应用Prism高亮, LOGO_SVG, NCA_STORAGE_KEYS, registerCleanup, Toast,
-    显示视觉能力警告, 移除视觉能力警告, 安全存储读, 工具名显示,
+    显示视觉能力警告, 移除视觉能力警告, 安全存储读, 工具名显示, 追加附件缩略图,
 } from "./工具函数.js";
 import {
     事件总线, 事件, 状态,
@@ -274,12 +274,17 @@ function _创建消息DOM(msg, index) {
     if (!window.DOMPurify) {
         msgBody.dataset.pendingSanitize = "true";
     }
+    // 用户消息附带附件图片缩略图
+    if (msg.role === "user" && msg.attachments && msg.attachments.length > 0) {
+        追加附件缩略图(msgBody, msg.attachments);
+    }
     const children = [
         el("div", { class: "nca-msg-header" }, headerChildren),
         msgBody,
     ];
     if (msg.role !== "user" && msg.billing) {
-        children.push(创建消耗信息DOM(msg.billing.cost, msg.billing.balance));
+        const billingDOM = 创建消耗信息DOM(msg.billing.cost, msg.billing.balance);
+        if (billingDOM) children.push(billingDOM);
     }
     const msgEl = el("div", { class: `nca-msg ${msg.role}` }, children);
     // 缓存索引：编辑回调与虚拟滚动测量都会读取
@@ -369,10 +374,29 @@ function _进入编辑模式(msgEl, msg, index) {
 
 export function 绑定代码块复制按钮(containerEl) {
     containerEl.querySelectorAll(".nca-code-copy").forEach(btn => {
-        registerCleanup(btn, "click", () => {
+        // 防重复绑定：同一按钮只注册一次 click
+        if (btn.dataset.bound === "1") return;
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", () => {
             const pre = btn.closest("pre");
             const code = pre?.querySelector("code")?.textContent || "";
             navigator.clipboard.writeText(code).then(() => {
+                btn.classList.add("copied");
+                btn.textContent = t("common.copied");
+                setTimeout(() => {
+                    btn.classList.remove("copied");
+                    btn.textContent = t("common.copy");
+                }, 1500);
+            }).catch(() => {
+                // clipboard API 不可用时降级 execCommand
+                const ta = document.createElement("textarea");
+                ta.value = code;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand("copy"); } catch(_) {}
+                ta.remove();
                 btn.classList.add("copied");
                 btn.textContent = t("common.copied");
                 setTimeout(() => {
@@ -736,7 +760,8 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
             绑定代码块复制按钮(aiBubble);
             // 显示本次消耗
             if (billing) {
-                aiBubble.appendChild(创建消耗信息DOM(billing.cost, billing.balance));
+                const billingDOM = 创建消耗信息DOM(billing.cost, billing.balance);
+                if (billingDOM) aiBubble.appendChild(billingDOM);
             }
             // 记录到消息列表
             状态.当前消息列表.push({ role: "assistant", content: 内容, timestamp: Date.now(), billing });

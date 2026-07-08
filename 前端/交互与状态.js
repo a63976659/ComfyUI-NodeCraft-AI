@@ -3,7 +3,7 @@
 // NodeCraft AI — Luxury Terminal Edition
 // ═══════════════════════════════════════════════════════════════
 
-import { NCA_STORAGE_KEYS, Toast, 安全存储读 } from "./工具函数.js";
+import { NCA_STORAGE_KEYS, Toast, 安全存储读, 设置当前模型上下文 } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
 
 // ─── 事件总线 ───────────────────────────────────────────────────
@@ -390,8 +390,11 @@ export async function 检查余额() {
  * 构建本次消耗信息 DOM。
  * cost: 云端返回的消耗积分（元），需转换为 token 数显示
  * balance: 云端返回的 token 余额
+ * 返回 null 当 cost 为 0 或无效（免费模型等无需显示消耗的场景）
  */
 export function 创建消耗信息DOM(cost, balance) {
+    // 免费模型 cost 为 0，无需显示消耗信息
+    if (!cost || (typeof cost === "number" && cost <= 0)) return null;
     const wrap = document.createElement("div");
     wrap.className = "nca-billing-info";
     wrap.style.cssText = "font-size:12px;color:var(--nca-text-secondary,#8a9bb8);margin-top:6px;padding-top:4px;border-top:1px dashed rgba(138,155,184,0.2);display:flex;gap:12px;align-items:center;";
@@ -647,7 +650,15 @@ export async function 查询模型能力() {
         return _能力缓存;
     }
     try {
-        const resp = await 请求("GET", "/model-capabilities");
+        // 传入当前模型信息，避免刚切换模型但设置未落盘时读到旧值
+        const params = new URLSearchParams();
+        params.set("model_source", 状态.模型来源 || "api");
+        if (状态.模型来源 === "local" && 状态.选中本地模型) {
+            params.set("model_name", 状态.选中本地模型);
+        } else if (状态.设置?.model_name) {
+            params.set("model_name", 状态.设置.model_name);
+        }
+        const resp = await 请求("GET", `/model-capabilities?${params}`);
         _能力缓存 = resp;
         _能力缓存时间 = now;
         return resp;
@@ -657,8 +668,14 @@ export async function 查询模型能力() {
     }
 }
 
-// 模型切换时清除能力缓存
-事件总线.on(事件.模型选择变更, () => { _能力缓存 = null; });
+// 模型切换时清除能力缓存并更新工具函数中的模型上下文
+事件总线.on(事件.模型选择变更, ({ 模型来源, 选中本地模型 }) => {
+    _能力缓存 = null;
+    设置当前模型上下文({
+        model_source: 模型来源 || '',
+        model_name: 模型来源 === 'local' ? (选中本地模型 || '') : '',
+    });
+});
 
 // ─── 文件操作 API ─────────────────────────────────────────────
 export async function 创建插件文件夹(pluginName) {

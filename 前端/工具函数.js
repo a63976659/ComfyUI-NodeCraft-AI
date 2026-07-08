@@ -141,7 +141,11 @@ export function _转义HTML(s) {
  */
 function _安全纯文本渲染(text) {
     if (!text) return "";
-    return _转义HTML(text).replace(/\n/g, "<br>");
+    // DOMPurify 未就绪时隐藏思考内容，仅显示占位提示
+    let cleanText = text
+        .replace(/<(?:think|thinking)>[\s\S]*?<\/(?:think|thinking)>/g, '\u23ce[\u601d\u8003\u8fc7\u7a0b]\u23ce')
+        .replace(/<(?:think|thinking)>[\s\S]*$/g, '\u23ce[\u601d\u8003\u4e2d...]\u23ce');
+    return _转义HTML(cleanText).replace(/\n/g, "<br>");
 }
 
 // ─── Diff 代码渲染辅助 ─────────────────────────────────────
@@ -258,9 +262,10 @@ let _cdnDegradedNotified = false;
 const _本地允许标签 = new Set([
     'p','br','strong','em','b','i','u','s','del','code','pre',
     'ul','ol','li','a','h1','h2','h3','h4','h5','h6','blockquote',
-    'table','thead','tbody','tr','td','th','span','div','img','hr'
+    'table','thead','tbody','tr','td','th','span','div','img','hr',
+    'details','summary','button'
 ]);
-const _本地允许属性 = new Set(['href','src','alt','title','class','id','target','rel']);
+const _本地允许属性 = new Set(['href','src','alt','title','class','id','target','rel','open','disabled']);
 
 // 在生成/处理链接时，验证 href 协议白名单
 function _验证链接安全(href) {
@@ -328,8 +333,8 @@ const _purifyConfig = {
                    'code','pre','span',
                    'blockquote',
                    'table','thead','tbody','tr','th','td',
-                   'div','details','summary'],
-    ALLOWED_ATTR: ['href','target','rel','src','alt','class','title','open'],
+                   'div','details','summary','button'],
+    ALLOWED_ATTR: ['href','target','rel','src','alt','class','title','open','disabled'],
     ALLOW_DATA_ATTR: false,
     ADD_ATTR: ['target'],
 };
@@ -480,6 +485,105 @@ function _配置Marked() {
  * - 已加载 marked.js → 高性能渲染（GFM 表格等）
  * - 未加载 → 降级到正则渲染（保持首屏可用）
  */
+// ─── 思考内容折叠处理 ──────────────────────────────────────
+
+/**
+ * 从文本中提取 <think>/<thinking> 标签内容，替换为占位符
+ * 返回 { text: 处理后文本, blocks: 思考内容块数组 }
+ */
+function _提取思考内容(text) {
+    const blocks = [];
+    let result = text;
+
+    // 1. 闭合的 <think>...</think> 和 <thinking>...</thinking>
+    result = result.replace(
+        /<(think|thinking)>([\s\S]*?)<\/\1>/g,
+        (_, tag, content) => {
+            const idx = blocks.length;
+            blocks.push({ content: content.trim(), streaming: false });
+            return `\n\n\u27e6NCA_THINK_${idx}\u27e7\n\n`;
+        }
+    );
+
+    // 2. 未闭合的 <think> 或 <thinking>（流式生成中）
+    result = result.replace(
+        /<(think|thinking)>([\s\S]*)$/g,
+        (_, tag, content) => {
+            const idx = blocks.length;
+            blocks.push({ content: content.trim(), streaming: true });
+            return `\n\n\u27e6NCA_THINK_${idx}\u27e7\n\n`;
+        }
+    );
+
+    // 3. 孤立的闭合标签清理
+    // 原因：TextIteratorStreamer 的 skip_special_tokens=True 会跳过 <think> 特殊 token，
+    // 但 </think> 不是特殊 token，会作为普通文本保留。
+    // 此时开头 <think> 已被 tokenizer 移除，只剩 </think> 残留。
+    // 将孤立的 </think> 或 </thinking> 及其前面的思考内容折叠为一个已完成的思考块。
+    result = result.replace(
+        /([\s\S]*?)<\/(think|thinking)>/g,
+        (_, content, tag) => {
+            const trimmed = content.trim();
+            if (!trimmed) return '';
+            const idx = blocks.length;
+            blocks.push({ content: trimmed, streaming: false });
+            return `\n\n\u27e6NCA_THINK_${idx}\u27e7\n\n`;
+        }
+    );
+
+    return { text: result, blocks };
+}
+
+/**
+ * 将占位符替换为 <details> 折叠 HTML
+ */
+function _恢复思考内容(html, blocks) {
+    if (!blocks || blocks.length === 0) return html;
+
+    for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        const summary = block.streaming ? '\u{1F4AD} \u601d\u8003\u4e2d...' : '\u{1F4AD} \u601d\u8003\u8fc7\u7a0b';
+        const openAttr = block.streaming ? ' open' : '';
+        // 思考内容用 Markdown 渲染（不再递归处理 thinking 标签）
+        const innerHtml = _渲染无思考Markdown(block.content);
+        const detailsHtml = `<details class="nca-thinking-block"${openAttr}><summary>${summary}</summary><div class="nca-thinking-content">${innerHtml}</div></details>`;
+
+        // 替换 <p>\u27e6NCA_THINK_i\u27e7</p> 或独立的 \u27e6NCA_THINK_i\u27e7
+        const pattern = new RegExp(
+            `<p>\\s*\u27e6NCA_THINK_${i}\u27e7\\s*<\/p>|\u27e6NCA_THINK_${i}\u27e7`,
+            'g'
+        );
+        html = html.replace(pattern, detailsHtml);
+    }
+
+    return html;
+}
+
+/**
+ * 内部 Markdown 渲染（不处理 thinking 标签，避免递归）
+ */
+function _渲染无思考Markdown(text) {
+    if (!text) return "";
+    let result;
+    if (_markedLib) {
+        try {
+            result = _markedLib.parse(text, { renderer: _markedRenderer });
+        } catch (e) {
+            result = _正则Markdown渲染(text);
+        }
+    } else {
+        result = _正则Markdown渲染(text);
+    }
+    if (_domPurifyLib) {
+        try {
+            return _domPurifyLib.sanitize(result, _purifyConfig);
+        } catch (e) {
+            return _本地消毒(result);
+        }
+    }
+    return _本地消毒(result);
+}
+
 export function 简易Markdown渲染(text) {
     if (!text) return "";
     // DOMPurify 正在异步加载中：使用纯文本渲染（转义所有 HTML）避免 XSS 风险
@@ -488,26 +592,39 @@ export function 简易Markdown渲染(text) {
     if (!_domPurifyLib && _domPurifyLoading) {
         return _安全纯文本渲染(text);
     }
+
+    // 提取思考内容，替换为占位符（避免被 Markdown 解析器破坏）
+    const { text: processedText, blocks } = _提取思考内容(text);
+
     let result;
     if (_markedLib) {
         try {
-            result = _markedLib.parse(text, { renderer: _markedRenderer });
+            result = _markedLib.parse(processedText, { renderer: _markedRenderer });
         } catch (e) {
             console.warn('[节点梦工厂] marked 渲染失败，降级:', e);
-            result = _正则Markdown渲染(text);
+            result = _正则Markdown渲染(processedText);
         }
     } else {
-        result = _正则Markdown渲染(text);
+        result = _正则Markdown渲染(processedText);
     }
     // DOMPurify 已加载完成时直接消毒；否则降级到 _本地消毒
     if (_domPurifyLib) {
         try {
-            return _domPurifyLib.sanitize(result, _purifyConfig);
+            result = _domPurifyLib.sanitize(result, _purifyConfig);
         } catch (e) {
             console.warn('[节点梦工厂] DOMPurify 消毒失败，降级本地消毒:', e);
+            result = _本地消毒(result);
         }
+    } else {
+        result = _本地消毒(result);
     }
-    return _本地消毒(result);
+
+    // 将占位符替换为 <details> 折叠 HTML
+    if (blocks.length > 0) {
+        result = _恢复思考内容(result, blocks);
+    }
+
+    return result;
 }
 
 // ─── Prism.js 语法高亮加载与应用 ────────────────────────────
@@ -675,10 +792,27 @@ export function 显示提示(_container, text, type = 'info') {
 // ─── 模型视觉能力检测 ─────────────────────────────────────────
 const _visionCapabilityCache = {};
 let _visionWarningDismissed = false;
+// 全局模型上下文，由交互与状态.js 更新，避免循环导入
+let _当前模型上下文 = { model_source: '', model_name: '' };
+
+export function 设置当前模型上下文(ctx) {
+    _当前模型上下文 = ctx;
+    // 模型变更时清除缓存
+    Object.keys(_visionCapabilityCache).forEach(k => delete _visionCapabilityCache[k]);
+}
 
 export async function 检查模型视觉能力() {
     try {
-        const resp = await fetch(`${NCA_API_BASE}/model-capabilities`);
+        const params = new URLSearchParams();
+        if (_当前模型上下文.model_source) {
+            params.set("model_source", _当前模型上下文.model_source);
+        }
+        if (_当前模型上下文.model_name) {
+            params.set("model_name", _当前模型上下文.model_name);
+        }
+        const qs = params.toString();
+        const url = qs ? `${NCA_API_BASE}/model-capabilities?${qs}` : `${NCA_API_BASE}/model-capabilities`;
+        const resp = await fetch(url);
         if (!resp.ok) return { supports_vision: false, model_source: '', model_name: '' };
         const json = await resp.json();
         const data = json.data || json;
@@ -722,6 +856,59 @@ export async function 显示视觉能力警告(inputArea) {
 export function 移除视觉能力警告(inputArea) {
     const banner = inputArea.parentElement?.querySelector('.nca-vision-warning');
     if (banner) banner.remove();
+}
+
+// ─── 图片压缩工具 ─────────────────────────────────────────
+/**
+ * 将图片 data URL 压缩为缩略图（用于会话内显示，原图仍发给模型）
+ * @param {string} dataUrl - 原始 data URL
+ * @param {number} maxSize - 缩略图最大边长（px）
+ * @returns {Promise<string>} 压缩后的 data URL
+ */
+export function 压缩图片缩略(dataUrl, maxSize = 300) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+    });
+}
+
+const _附件图片类型 = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+
+/**
+ * 为用户消息气泡追加附件图片缩略图（异步压缩，不阻塞渲染）
+ * @param {HTMLElement} msgBody - 消息体 DOM
+ * @param {Array} attachments - 附件列表 [{name, type, size, data}]
+ */
+export async function 追加附件缩略图(msgBody, attachments) {
+    if (!attachments || attachments.length === 0) return;
+    const images = attachments.filter(a => _附件图片类型.includes(a.type));
+    if (images.length === 0) return;
+    const container = el('div', { class: 'nca-msg-attachments' });
+    for (const img of images) {
+        const thumb = el('img', { class: 'nca-msg-attach-thumb', title: img.name || '' });
+        thumb.style.cssText = 'max-width:200px;max-height:150px;border-radius:6px;border:1px solid var(--nca-border);cursor:pointer;object-fit:cover;';
+        // 先放原图占位，压缩完成后替换
+        thumb.src = img.data;
+        container.appendChild(thumb);
+        // 异步压缩
+        try {
+            const compressed = await 压缩图片缩略(img.data);
+            thumb.src = compressed;
+        } catch (_) { /* 保留原图 */ }
+    }
+    msgBody.appendChild(container);
 }
 
 function 重置视觉警告状态() {

@@ -76,6 +76,36 @@
     color: var(--nca-fg);
 }
 
+/* 免费模型徽章：淡蓝色图标，紧贴 select 右侧 */
+.nca-free-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--nca-font-mono);
+    letter-spacing: 0.4px;
+    color: #6ab4ff;
+    background: rgba(106, 180, 255, 0.12);
+    border: 1px solid rgba(106, 180, 255, 0.22);
+    border-radius: var(--nca-radius-xs, 3px);
+    white-space: nowrap;
+    user-select: none;
+    pointer-events: none;
+}
+
+.nca-free-badge::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #6ab4ff;
+    box-shadow: 0 0 4px rgba(106, 180, 255, 0.5);
+}
+
 /* 释放显存按钮：仅本地模式可见，紧贴在 .nca-model-select 右侧 */
 .nca-unload-btn {
     flex-shrink: 0;
