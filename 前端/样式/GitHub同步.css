@@ -1,0 +1,173 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — GitHub 同步
+   GitHub 同步入口按钮 .nc-sync-btn
+   GitHub 同步对话框 .nc-sync-overlay / .nc-sync-modal / .nc-sync-header
+   字段 .nc-sync-field / .nc-sync-input / .nc-sync-checkbox-field
+   状态与进度 .nc-sync-status / .nc-sync-progress
+   操作区按钮 .nc-sync-btn-cancel / .nc-sync-btn-confirm
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ═══ GitHub 同步按钮 ═══ */
+.nc-sync-btn {
+    font-size: 11px;
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    border: 1px solid var(--nca-accent-dim);
+    border-radius: var(--nca-radius-sm);
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    margin-left: var(--nca-space-sm);
+    transition: all var(--nca-transition-normal);
+}
+.nc-sync-btn:hover {
+    background: var(--nca-accent-dim);
+    border-color: var(--nca-accent-glow);
+    text-shadow: 0 0 6px var(--nca-accent-glow);
+}
+
+/* ═══ 同步对话框 ═══ */
+.nc-sync-overlay {
+    position: absolute;
+    inset: 0;
+    background: var(--nca-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: var(--nca-z-modal);
+    backdrop-filter: blur(2px);
+}
+.nc-sync-modal {
+    background: var(--nca-bg-secondary);
+    border: 1px solid var(--nca-accent-dim);
+    border-radius: var(--nca-radius-lg);
+    width: 400px;
+    max-width: calc(100% - 32px);
+    box-shadow: var(--nca-shadow-lg);
+}
+.nc-sync-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--nca-space-md) var(--nca-space-lg);
+    border-bottom: 1px solid var(--nca-border);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--nca-fg);
+}
+.nc-sync-close {
+    background: none;
+    border: none;
+    color: var(--nca-fg-dim);
+    font-size: 16px;
+    cursor: pointer;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    border-radius: var(--nca-radius-sm);
+}
+.nc-sync-close:hover {
+    background: var(--nca-border);
+    color: var(--nca-fg);
+}
+.nc-sync-body {
+    padding: var(--nca-space-lg);
+}
+.nc-sync-field {
+    margin-bottom: var(--nca-space-md);
+}
+.nc-sync-field label {
+    display: block;
+    font-size: 11px;
+    color: var(--nca-fg-dim);
+    margin-bottom: var(--nca-space-xs);
+}
+.nc-sync-value {
+    font-size: 13px;
+    color: var(--nca-fg);
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    background: var(--nca-bg-input);
+    border-radius: var(--nca-radius-sm);
+    display: block;
+}
+.nc-sync-input {
+    width: 100%;
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    background: var(--nca-bg-input);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg);
+    font-size: 13px;
+    outline: none;
+    box-sizing: border-box;
+}
+.nc-sync-input:focus {
+    border-color: var(--nca-accent-glow);
+    box-shadow: 0 0 8px var(--nca-accent-dim);
+}
+.nc-sync-checkbox-field {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+}
+.nc-sync-checkbox-field label {
+    display: inline;
+    margin-bottom: 0;
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+}
+.nc-sync-status {
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    background: var(--nca-bg-input);
+    border-radius: var(--nca-radius-sm);
+    margin-bottom: var(--nca-space-md);
+    min-height: 20px;
+}
+.nc-sync-progress {
+    font-size: 12px;
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    background: var(--nca-accent-dim);
+    border-radius: var(--nca-radius-sm);
+    margin-bottom: var(--nca-space-md);
+    line-height: 1.6;
+}
+.nc-sync-actions {
+    display: flex;
+    gap: var(--nca-space-sm);
+    justify-content: flex-end;
+    margin-top: var(--nca-space-lg);
+}
+.nc-sync-btn-cancel {
+    padding: var(--nca-space-sm) var(--nca-space-lg);
+    background: var(--nca-btn-secondary-bg);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg-dim);
+    font-size: 13px;
+    cursor: pointer;
+}
+.nc-sync-btn-cancel:hover {
+    background: var(--nca-border-hover);
+    color: var(--nca-fg);
+}
+.nc-sync-btn-confirm {
+    padding: var(--nca-space-sm) var(--nca-space-xl);
+    background: var(--nca-accent-dim);
+    border: 1px solid var(--nca-accent-glow);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-accent);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--nca-transition-normal);
+}
+.nc-sync-btn-confirm:hover {
+    background: var(--nca-accent-glow);
+    border-color: var(--nca-accent-glow);
+    text-shadow: 0 0 8px var(--nca-accent-glow);
+}
+.nc-sync-btn-confirm:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

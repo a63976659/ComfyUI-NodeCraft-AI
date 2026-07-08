@@ -1,0 +1,349 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 任务规划面板
+   规划容器 .nca-planning-panel、标题栏、复杂度标签、步骤列表
+   风险提示、确认分隔线、澄清问题区、按钮区、倒计时进度条、规划中动画
+   Neo-Noir 暗色主题：半透明深色背景 + 蓝色高亮
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 关键帧 ───────────────────────────────────────────────── */
+@keyframes nca-planning-enter {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes nca-planning-timer-shrink {
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
+}
+
+@keyframes nca-planning-dot-pulse {
+    0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+}
+
+/* ─── 规划面板容器 ─────────────────────────────────────────── */
+.nca-planning-panel {
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 12px;
+    border-left: 3px solid var(--nca-accent, #5b9fff);
+    padding: 16px 20px;
+    margin-top: 12px;
+    box-shadow: var(--nca-shadow-md);
+    animation: nca-planning-enter var(--nca-transition-slow, 400ms cubic-bezier(0.16, 1, 0.3, 1)) ease both;
+}
+
+/* ─── 标题栏 ───────────────────────────────────────────────── */
+.nca-planning-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+.nca-planning-header::before {
+    content: '📋';
+    font-size: 16px;
+    line-height: 1;
+}
+
+/* ─── 复杂度标签 ───────────────────────────────────────────── */
+.nca-planning-complexity {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: #ffffff;
+    letter-spacing: 0.3px;
+}
+
+.nca-planning-complexity.simple {
+    background: rgba(16, 185, 129, 0.85);
+}
+
+.nca-planning-complexity.moderate {
+    background: rgba(245, 158, 11, 0.9);
+}
+
+.nca-planning-complexity.complex {
+    background: rgba(239, 68, 68, 0.9);
+}
+
+/* ─── 步骤列表 ─────────────────────────────────────────────── */
+.nca-planning-steps {
+    list-style: none;
+    counter-reset: nca-planning-step;
+    margin: 14px 0 0;
+    padding: 0;
+}
+
+.nca-planning-steps li {
+    counter-increment: nca-planning-step;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 10px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #e0e0e0;
+}
+
+.nca-planning-steps li:last-child { margin-bottom: 0; }
+
+.nca-planning-steps li::before {
+    content: counter(nca-planning-step);
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--nca-accent, #5b9fff);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    margin-top: 2px;
+}
+
+/* ─── 风险提示 ─────────────────────────────────────────────── */
+.nca-planning-risks {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-left: 3px solid #ff9800;
+    border-radius: 0 6px 6px 0;
+    background: rgba(255, 152, 0, 0.1);
+    font-size: 13px;
+    line-height: 1.6;
+    color: #ffb74d;
+}
+
+.nca-planning-risks::before {
+    content: '⚠';
+    margin-right: 6px;
+}
+
+/* ─── 分隔线（带文字：需要你的确认）───────────────────────── */
+.nca-planning-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 14px;
+    font-size: 12px;
+    color: #888;
+    white-space: nowrap;
+}
+
+.nca-planning-divider::before,
+.nca-planning-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+/* ─── 问题区域 ─────────────────────────────────────────────── */
+.nca-planning-questions {
+    margin-top: 4px;
+}
+
+.nca-planning-question {
+    border-left: 3px solid #ffd54f;
+    padding: 12px;
+    margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 0 6px 6px 0;
+}
+
+.nca-planning-question:last-child { margin-bottom: 0; }
+
+.nca-planning-question-text {
+    font-size: 14px;
+    color: #ffffff;
+    line-height: 1.6;
+    margin-bottom: 8px;
+}
+
+.nca-planning-question-text::before {
+    content: '❓';
+    margin-right: 6px;
+}
+
+/* ─── 选项（自定义单选按钮）─────────────────────────────────── */
+.nca-planning-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 2;
+    color: #e0e0e0;
+    cursor: pointer;
+    transition: background var(--nca-transition-fast, 150ms ease);
+}
+
+.nca-planning-option:hover {
+    background: rgba(91, 159, 255, 0.1);
+}
+
+/* 隐藏原生 radio */
+.nca-planning-option input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+/* 自定义圆圈 */
+.nca-planning-option .nca-planning-radio {
+    flex-shrink: 0;
+    position: relative;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid #666;
+    box-sizing: border-box;
+    transition: border-color var(--nca-transition-fast, 150ms ease);
+}
+
+.nca-planning-option .nca-planning-radio::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--nca-accent, #5b9fff);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform var(--nca-transition-fast, 150ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+/* 选中态 */
+.nca-planning-option input[type="radio"]:checked + .nca-planning-radio {
+    border-color: var(--nca-accent, #5b9fff);
+}
+
+.nca-planning-option input[type="radio"]:checked + .nca-planning-radio::after {
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.nca-planning-option input[type="radio"]:focus-visible + .nca-planning-radio {
+    box-shadow: 0 0 0 2px rgba(91, 159, 255, 0.3);
+}
+
+/* ─── 按钮区域 ─────────────────────────────────────────────── */
+.nca-planning-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.nca-planning-btn-confirm,
+.nca-planning-btn-skip {
+    padding: 8px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--nca-transition-fast, 150ms ease);
+}
+
+.nca-planning-btn-confirm {
+    background: var(--nca-accent, #5b9fff);
+    border: 1px solid var(--nca-accent, #5b9fff);
+    color: #ffffff;
+}
+
+.nca-planning-btn-confirm:hover {
+    filter: brightness(1.15);
+}
+
+.nca-planning-btn-confirm:disabled {
+    background: #555;
+    border-color: #555;
+    cursor: not-allowed;
+    filter: none;
+}
+
+.nca-planning-btn-skip {
+    background: transparent;
+    border: 1px solid var(--nca-accent, #5b9fff);
+    color: var(--nca-accent, #5b9fff);
+}
+
+.nca-planning-btn-skip:hover {
+    background: rgba(91, 159, 255, 0.1);
+}
+
+/* ─── 倒计时进度条 ─────────────────────────────────────────── */
+.nca-planning-timer {
+    margin-top: 14px;
+}
+
+.nca-planning-timer-bar {
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--nca-accent, #5b9fff), rgba(91, 159, 255, 0.4));
+    transform-origin: right center;
+    animation: nca-planning-timer-shrink 30s linear forwards;
+}
+
+.nca-planning-timer-text {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #888;
+}
+
+/* ─── 规划中动画（脉冲指示器）─────────────────────────────── */
+.nca-planning-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #aaa;
+}
+
+.nca-planning-loading .nca-planning-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.nca-planning-loading .nca-planning-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--nca-accent, #5b9fff);
+    animation: nca-planning-dot-pulse 1.4s infinite ease-in-out;
+}
+
+.nca-planning-loading .nca-planning-dots span:nth-child(1) { animation-delay: 0s; }
+.nca-planning-loading .nca-planning-dots span:nth-child(2) { animation-delay: 0.2s; }
+.nca-planning-loading .nca-planning-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* ─── 响应式（移动端）───────────────────────────────────────── */
+@media (max-width: 600px) {
+    .nca-planning-panel {
+        padding: 12px 14px;
+    }
+
+    .nca-planning-actions {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .nca-planning-btn-confirm,
+    .nca-planning-btn-skip {
+        width: 100%;
+        text-align: center;
+    }
+}

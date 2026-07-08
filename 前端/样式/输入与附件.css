@@ -1,0 +1,397 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 输入与附件
+   底部输入区域 .nca-input-area / .nca-input-wrapper / .nca-send-btn
+   模型切换 .nca-model-switcher / .nca-switch-btn / .nca-model-select
+   模型市场列表项 .nca-model-item，API 信息 .nca-api-info
+   附件预览 .nca-attachments-preview / .nca-attach-card / .nca-attach-btn
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 底部输入区域 ─────────────────────────────────────────── */
+
+/* --- Model Switcher --- */
+.nca-model-switcher {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+}
+
+.nca-switch-group {
+    display: flex;
+    gap: var(--nca-space-2xs);
+    background: var(--nca-bg-primary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    padding: var(--nca-space-2xs);
+}
+
+.nca-switch-btn {
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border: none;
+    border-radius: var(--nca-radius-sm);
+    background: transparent;
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.3px;
+}
+
+.nca-switch-btn:hover:not(.active) {
+    color: var(--nca-fg);
+}
+
+.nca-switch-btn.active {
+    background: var(--nca-accent-dim);
+    color: var(--nca-accent);
+    font-weight: 600;
+    box-shadow: 0 0 6px var(--nca-accent-dim);
+}
+
+.nca-model-select {
+    flex: 1;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    background: var(--nca-bg-input);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    outline: none;
+    cursor: pointer;
+    transition: border-color var(--nca-transition-fast);
+    min-width: 0;
+}
+
+.nca-model-select:focus {
+    border-color: var(--nca-accent-glow);
+}
+
+.nca-model-select option {
+    background: var(--nca-bg-secondary);
+    color: var(--nca-fg);
+}
+
+/* 释放显存按钮：仅本地模式可见，紧贴在 .nca-model-select 右侧 */
+.nca-unload-btn {
+    flex-shrink: 0;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    background: transparent;
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-unload-btn:hover:not(:disabled) {
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+}
+
+.nca-unload-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.nca-unload-btn.loading {
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+}
+
+/* 模型市场列表项 */
+.nca-model-item {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-sm);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    margin-bottom: var(--nca-space-xs);
+    background: var(--nca-bg-primary);
+    transition: border-color var(--nca-transition-fast);
+}
+.nca-model-item:hover {
+    border-color: var(--nca-accent-glow);
+}
+.nca-model-name {
+    font-size: 12px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.nca-model-meta {
+    font-size: 10px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    margin-top: var(--nca-space-2xs);
+}
+.nca-model-download-btn {
+    flex-shrink: 0;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-accent);
+    background: transparent;
+    border: 1px solid var(--nca-accent);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+}
+.nca-model-download-btn:hover {
+    background: var(--nca-accent-dim);
+}
+.nca-model-download-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.nca-api-info {
+    flex: 1;
+    font-size: 11px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    border: 1px solid transparent;
+    border-radius: var(--nca-radius-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-api-info:hover {
+    color: var(--nca-accent);
+    border-color: var(--nca-border);
+    background: var(--nca-accent-dim);
+}
+
+.nca-input-area {
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-secondary);
+    flex-shrink: 0;
+}
+
+/* ─── 文件附件预览区 ───────────────────────────────── */
+.nca-attachments-preview {
+    display: flex;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-xs);
+    margin-bottom: var(--nca-space-sm);
+    overflow-x: auto;
+    background: var(--nca-overlay);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    backdrop-filter: blur(4px);
+}
+
+.nca-attachments-preview::-webkit-scrollbar { height: 3px; }
+.nca-attachments-preview::-webkit-scrollbar-track { background: var(--nca-scrollbar-track); }
+.nca-attachments-preview::-webkit-scrollbar-thumb { background: var(--nca-border-hover); border-radius: var(--nca-space-2xs); }
+
+.nca-attach-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    width: 68px;
+    min-width: 68px;
+    padding: var(--nca-space-sm) var(--nca-space-xs) var(--nca-space-xs);
+    background: var(--nca-bg-tertiary);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nca-attach-card:hover {
+    border-color: var(--nca-border-hover);
+    background: var(--nca-hover-overlay);
+}
+
+.nca-attach-thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--nca-radius-sm);
+    object-fit: cover;
+    border: 1px solid var(--nca-border);
+}
+
+.nca-attach-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--nca-radius-sm);
+    background: var(--nca-accent-dim);
+    border: 1px solid var(--nca-accent-glow);
+    font-size: 9px;
+    font-family: var(--nca-font-mono);
+    font-weight: 700;
+    color: var(--nca-accent);
+    letter-spacing: 0.3px;
+}
+
+.nca-attach-name {
+    font-size: 9px;
+    color: var(--nca-fg-dim);
+    max-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-family: var(--nca-font-mono);
+}
+
+.nca-attach-remove {
+    position: absolute;
+    top: var(--nca-space-2xs);
+    right: var(--nca-space-2xs);
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: none;
+    background: var(--nca-overlay);
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--nca-transition-fast);
+    line-height: 1;
+}
+
+.nca-attach-card:hover .nca-attach-remove {
+    opacity: 1;
+}
+
+.nca-attach-remove:hover {
+    background: var(--nca-error);
+    color: var(--nca-btn-primary-text);
+}
+
+/* ─── 添加文件按钮 ─────────────────────────────────── */
+.nca-attach-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--nca-radius-sm);
+    border: 1px solid var(--nca-border);
+    background: var(--nca-hover-overlay);
+    color: var(--nca-fg-dim);
+    font-size: 16px;
+    font-weight: 300;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all var(--nca-transition-fast);
+    backdrop-filter: blur(4px);
+}
+
+.nca-attach-btn:hover {
+    border-color: var(--nca-accent);
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    box-shadow: 0 0 var(--nca-space-md) var(--nca-accent-dim);
+}
+
+.nca-attach-btn:disabled,
+.nca-attach-btn.nca-attach-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.nca-attach-btn:disabled:hover {
+    background: transparent;
+    border-color: var(--nca-border);
+    color: var(--nca-fg-dim);
+    box-shadow: none;
+}
+
+.nca-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    padding: var(--nca-space-sm) var(--nca-space-sm) var(--nca-space-sm) var(--nca-space-md);
+    background: var(--nca-bg-input);
+    transition: all var(--nca-transition-normal);
+}
+
+.nca-input-wrapper:focus-within {
+    border-color: var(--nca-accent-glow);
+    box-shadow: 0 0 0 3px var(--nca-accent-dim), 0 0 var(--nca-space-xl) var(--nca-accent-dim);
+}
+
+.nca-input-wrapper textarea {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--nca-fg);
+    font-size: 13px;
+    font-family: var(--nca-font-body);
+    line-height: 1.5;
+    resize: none;
+    outline: none;
+    min-height: 20px;
+    max-height: 100px;
+    padding: var(--nca-space-2xs) 0;
+}
+
+.nca-input-wrapper textarea::placeholder {
+    color: var(--nca-fg-muted);
+    font-style: italic;
+}
+
+.nca-send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--nca-border);
+    background: transparent;
+    color: var(--nca-fg-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    transition: all var(--nca-transition-fast);
+    flex-shrink: 0;
+}
+
+.nca-send-btn.active {
+    background: var(--nca-accent);
+    border-color: var(--nca-accent);
+    color: var(--nca-bg-primary);
+    box-shadow: 0 0 var(--nca-space-md) var(--nca-accent-dim);
+}
+
+.nca-send-btn.active:hover {
+    box-shadow: 0 0 var(--nca-space-xl) var(--nca-accent-glow);
+    transform: scale(1.08);
+}
+
+.nca-send-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    transform: none;
+}

@@ -1,0 +1,1087 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 可视化面板
+   可视化容器 .nc-viz-* 与画布、状态、消息样式
+   操作栏 .nca-viz-toolbar、模式切换 .nca-viz-mode-toggle / .nca-viz-mode-btn
+   分析按钮 .nca-viz-analyze-btn、加载 .nca-viz-spinner
+   左上浮层 .nca-viz-overlay / .nca-viz-overlay-btn
+   空白引导提示 .nca-viz-empty-*
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 可视化面板 ─── */
+.nc-viz-container {
+    height: 480px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    position: relative;
+    background: var(--nca-bg-primary);
+    border-radius: var(--nca-radius-sm);
+    margin: var(--nca-space-xs) var(--nca-space-md);
+}
+
+.nc-viz-container canvas {
+    flex: 1;
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: var(--nca-radius-sm);
+}
+
+.nc-viz-status {
+    font-family: monospace;
+    color: var(--nca-fg-dim);
+    border-bottom-color: var(--nca-border);
+}
+
+.nc-viz-messages {
+    font-size: 12px;
+}
+
+/* ─── 可视化操作栏 ─── */
+.nca-viz-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    background: linear-gradient(180deg, var(--nca-bg-tertiary) 0%, var(--nca-bg-secondary) 100%);
+    border-bottom: 1px solid var(--nca-accent-dim);
+    flex-shrink: 0;
+}
+
+.nca-viz-mode-toggle {
+    display: flex;
+    gap: var(--nca-space-2xs);
+    background: var(--nca-overlay);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    padding: var(--nca-space-2xs);
+}
+
+.nca-viz-mode-btn {
+    background: transparent;
+    border: none;
+    color: var(--nca-fg-dim);
+    font-size: 11px;
+    font-weight: 500;
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.2px;
+}
+
+.nca-viz-mode-btn:hover:not(.active):not(:disabled) {
+    background: var(--nca-accent-dim);
+    color: var(--nca-fg);
+}
+
+.nca-viz-mode-btn.active {
+    background: var(--nca-accent-dim);
+    color: var(--nca-fg);
+    font-weight: 700;
+    box-shadow: 0 0 0 1px var(--nca-accent-glow) inset,
+                0 0 8px var(--nca-accent-dim);
+}
+
+.nca-viz-mode-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.nca-viz-analyze-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+    background: var(--nca-btn-primary-bg);
+    color: var(--nca-btn-primary-text);
+    border: 1px solid var(--nca-accent-glow);
+    border-radius: var(--nca-radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset,
+                var(--nca-shadow-sm);
+    letter-spacing: 0.3px;
+}
+
+.nca-viz-analyze-btn:hover:not(:disabled) {
+    background: var(--nca-btn-primary-bg);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
+                var(--nca-shadow-glow);
+    transform: scale(1.02);
+}
+
+.nca-viz-analyze-btn:active:not(:disabled) {
+    transform: scale(0.99);
+}
+
+.nca-viz-analyze-btn:disabled,
+.nca-viz-analyze-btn.loading {
+    cursor: wait;
+    opacity: 0.85;
+    background: linear-gradient(180deg, var(--nca-bg-elevated) 0%, var(--nca-bg-secondary) 100%);
+}
+
+.nca-viz-spinner {
+    width: 11px;
+    height: 11px;
+    border: 2px solid var(--nca-border-hover);
+    border-top-color: var(--nca-btn-primary-text);
+    border-radius: 50%;
+    display: inline-block;
+    animation: nca-viz-spin 0.7s linear infinite;
+}
+
+/* ─── 可视化左上角浮层 ─── */
+.nca-viz-overlay {
+    position: absolute;
+    top: calc(var(--nca-space-sm) + 50px);
+    left: calc(var(--nca-space-sm) + 5px);
+    z-index: var(--nca-z-dropdown);
+    display: flex;
+    gap: var(--nca-space-2xs);
+    padding: var(--nca-space-2xs);
+    background: var(--nca-glass);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--nca-accent-dim);
+    border-radius: var(--nca-radius-sm);
+    box-shadow: var(--nca-shadow-md);
+    pointer-events: auto;
+}
+
+.nca-viz-overlay-btn {
+    background: transparent;
+    border: none;
+    color: var(--nca-fg);
+    font-size: 10px;
+    font-weight: 500;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    border-radius: var(--nca-radius-sm);
+    cursor: pointer;
+    transition: all var(--nca-transition-fast);
+    letter-spacing: 0.3px;
+}
+
+.nca-viz-overlay-btn:hover:not(.disabled):not(.active) {
+    background: var(--nca-accent-dim);
+    color: var(--nca-btn-primary-text);
+}
+
+.nca-viz-overlay-btn.active {
+    background: var(--nca-accent-glow);
+    color: var(--nca-btn-primary-text);
+    font-weight: 700;
+    box-shadow: 0 0 0 1px var(--nca-accent-glow) inset;
+}
+
+.nca-viz-overlay-btn.disabled {
+    color: var(--nca-fg-muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+/* ─── 可视化空白引导提示 ─── */
+.nca-viz-empty-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--nca-space-sm);
+    color: var(--nca-fg-dim);
+    text-align: center;
+    padding: var(--nca-space-2xl);
+    pointer-events: none;
+}
+
+.nca-viz-empty-icon {
+    font-size: 38px;
+    color: var(--nca-accent-glow);
+    text-shadow: 0 0 18px var(--nca-accent-glow);
+    animation: nca-viz-empty-pulse 2.4s ease-in-out infinite;
+}
+
+.nca-viz-empty-title {
+    font-size: 13px;
+    color: var(--nca-fg);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.nca-viz-empty-desc {
+    font-size: 11px;
+    color: var(--nca-fg-dim);
+    max-width: 340px;
+    line-height: 1.6;
+}
+
+/* ═══ 浅色主题适配：模式切换按钮组深灰过深，统一为浅蓝 ═══
+   .nca-viz-mode-toggle 原本使用 --nca-overlay (浅色下 rgba(0,0,0,0.35))
+   作为背景，在浅色主题下会发黑。改为品牌蓝低透，选中态加重。 */
+.nca-theme-light .nca-viz-mode-toggle {
+    background: rgba(37, 99, 235, 0.06);
+    border-color: var(--nca-border);
+}
+
+.nca-theme-light .nca-viz-mode-btn {
+    color: var(--nca-fg-dim);
+}
+
+.nca-theme-light .nca-viz-mode-btn:hover:not(.active):not(:disabled) {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--nca-accent);
+}
+
+.nca-theme-light .nca-viz-mode-btn.active {
+    background: rgba(37, 99, 235, 0.15);
+    color: var(--nca-accent);
+    box-shadow: 0 0 0 1px var(--nca-accent-glow) inset,
+                0 1px 2px rgba(37, 99, 235, 0.12);
+}
+
+/* ═══ 浅色主题适配：HUD 覆盖层元素 ═══ */
+
+/* 搜索框 */
+.nca-theme-light .nc-viz-hud-search input {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #111827;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.nca-theme-light .nc-viz-hud-search input::placeholder {
+    color: #9ca3af;
+}
+.nca-theme-light .nc-viz-hud-search input:focus {
+    border-color: #2563eb;
+}
+.nca-theme-light .nc-viz-hud-search .nc-viz-hud-search-icon {
+    color: #9ca3af;
+}
+
+/* 标题 */
+.nca-theme-light .nc-viz-hud-title h1 {
+    color: #2563eb;
+    text-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-title .nc-viz-hud-subtitle {
+    color: #6b7280;
+}
+
+/* 统计栏 */
+.nca-theme-light .nc-viz-hud-stat span {
+    color: #6b7280;
+}
+.nca-theme-light .nc-viz-hud-stat strong {
+    color: #111827;
+}
+.nca-theme-light .nc-viz-hud-stat .nc-viz-hud-dot.c {
+    background: #2563eb;
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-stat .nc-viz-hud-dot.g {
+    background: #059669;
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-stat .nc-viz-hud-dot.r {
+    background: #dc2626;
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-stat .nc-viz-hud-dot.a {
+    background: #d97706;
+    box-shadow: none;
+}
+
+/* 图例 */
+.nca-theme-light .nc-viz-hud-legend {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.nca-theme-light .nc-viz-hud-legend h3 {
+    color: #2563eb;
+}
+.nca-theme-light .nc-viz-hud-legend-item {
+    color: #374151;
+}
+.nca-theme-light .nc-viz-hud-legend-line.green {
+    background: #059669;
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-legend-line.red {
+    background: #dc2626;
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-legend-node.ok {
+    background: radial-gradient(circle at 35% 35%, #34d399, #059669);
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-legend-node.err {
+    background: radial-gradient(circle at 35% 35%, #f87171, #dc2626);
+    box-shadow: none;
+}
+.nca-theme-light .nc-viz-hud-legend-node.warn {
+    background: radial-gradient(circle at 35% 35%, #fbbf24, #d97706);
+    box-shadow: none;
+}
+
+/* 过滤按钮 */
+.nca-theme-light .nc-viz-hud-filters button {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #6b7280;
+}
+.nca-theme-light .nc-viz-hud-filters button:hover,
+.nca-theme-light .nc-viz-hud-filters button.active {
+    color: #2563eb;
+    border-color: #2563eb;
+    background: rgba(37, 99, 235, 0.06);
+}
+
+/* 操作提示 */
+.nca-theme-light .nc-viz-hud-controls {
+    color: #6b7280;
+}
+.nca-theme-light .nc-viz-hud-controls kbd {
+    background: rgba(37, 99, 235, 0.06);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #374151;
+}
+
+/* 全屏按钮 */
+.nca-theme-light .nc-viz-hud-fullscreen {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(0, 0, 0, 0.12);
+    color: #374151;
+}
+.nca-theme-light .nc-viz-hud-fullscreen:hover {
+    color: #2563eb;
+    border-color: rgba(37, 99, 235, 0.3);
+    background: rgba(37, 99, 235, 0.06);
+}
+.nca-theme-light .nc-viz-hud-fullscreen.active {
+    color: #2563eb;
+    border-color: rgba(37, 99, 235, 0.4);
+}
+
+/* 节点详情面板（右侧滑出） */
+.nca-theme-light .nc-viz-detail-panel {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.nca-theme-light .nc-viz-detail-close {
+    color: #9ca3af;
+}
+.nca-theme-light .nc-viz-detail-close:hover {
+    color: #2563eb;
+}
+.nca-theme-light .nc-viz-detail-name {
+    color: #111827;
+}
+.nca-theme-light .nc-viz-detail-type {
+    color: #6b7280;
+}
+.nca-theme-light .nc-viz-detail-status.normal {
+    background: rgba(5, 150, 105, 0.1);
+    color: #059669;
+    border-color: rgba(5, 150, 105, 0.25);
+}
+.nca-theme-light .nc-viz-detail-status.error {
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+    border-color: rgba(220, 38, 38, 0.25);
+}
+.nca-theme-light .nc-viz-detail-status.warning {
+    background: rgba(217, 119, 6, 0.1);
+    color: #d97706;
+    border-color: rgba(217, 119, 6, 0.25);
+}
+.nca-theme-light .nc-viz-detail-desc {
+    color: #374151;
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+.nca-theme-light .nc-viz-detail-error-section {
+    border-left-color: #dc2626;
+    background: rgba(220, 38, 38, 0.08);
+}
+.nca-theme-light .nc-viz-detail-error-title {
+    color: #dc2626;
+}
+.nca-theme-light .nc-viz-detail-error-content {
+    color: #b91c1c;
+}
+.nca-theme-light .nc-viz-detail-warning-section {
+    border-left-color: #d97706;
+    background: rgba(217, 119, 6, 0.08);
+}
+.nca-theme-light .nc-viz-detail-warning-title {
+    color: #d97706;
+}
+.nca-theme-light .nc-viz-detail-warning-content {
+    color: #b45309;
+}
+.nca-theme-light .nc-viz-detail-conn-title {
+    color: #2563eb;
+}
+.nca-theme-light .nc-viz-detail-conn li {
+    color: #374151;
+}
+.nca-theme-light .nc-viz-detail-conn .conn-arrow {
+    color: #2563eb;
+}
+
+/* Tooltip */
+.nca-theme-light .nc-viz-tooltip {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.nca-theme-light .nc-viz-tooltip .tt-name {
+    color: #111827;
+}
+.nca-theme-light .nc-viz-tooltip .tt-status.normal {
+    color: #059669;
+}
+.nca-theme-light .nc-viz-tooltip .tt-status.error {
+    color: #dc2626;
+}
+.nca-theme-light .nc-viz-tooltip .tt-status.warning {
+    color: #d97706;
+}
+
+/* HUD 角标装饰 */
+.nca-theme-light .nc-viz-hud-corner::before,
+.nca-theme-light .nc-viz-hud-corner::after {
+    background: #2563eb;
+    opacity: 0.25;
+}
+
+/* 全屏时容器背景 */
+.nca-theme-light .nc-viz-container:fullscreen,
+.nca-theme-light .nc-viz-container:-webkit-full-screen {
+    background: #f0f1f8;
+}
+
+/* 演示数据标签 */
+.nca-viz-demo-badge {
+    background: rgba(0, 20, 50, 0.82);
+    border: 1px solid rgba(0, 200, 255, 0.25);
+    color: #7dd3fc;
+}
+.nca-theme-light .nca-viz-demo-badge {
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(37, 99, 235, 0.2);
+    color: #2563eb;
+}
+
+/* ─── HUD 覆盖层 ─── */
+
+/* 搜索框（左上角） */
+.nc-viz-hud-search {
+    position: absolute;
+    top: 22px;
+    left: 12px;
+    z-index: 10;
+}
+.nc-viz-hud-search input {
+    background: rgba(8, 16, 32, 0.88);
+    border: 1px solid rgba(0, 180, 255, 0.12);
+    border-radius: 8px;
+    padding: 6px 12px 6px 30px;
+    color: #e8f0ff;
+    font-family: inherit;
+    font-size: 12px;
+    width: 170px;
+    outline: none;
+    transition: border-color 0.3s;
+    backdrop-filter: blur(12px);
+}
+.nc-viz-hud-search input:focus {
+    border-color: #00e5ff;
+}
+.nc-viz-hud-search input::placeholder {
+    color: #4a5a78;
+}
+.nc-viz-hud-search .nc-viz-hud-search-icon {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #4a5a78;
+    font-size: 12px;
+    pointer-events: none;
+}
+
+/* 标题（顶部中间） */
+.nc-viz-hud-title {
+    position: absolute;
+    top: 35px;
+    left: 50%;
+    display: none;
+    transform: translateX(-50%);
+    z-index: 10;
+    text-align: center;
+    pointer-events: none;
+}
+.nc-viz-hud-title h1 {
+    font-family: monospace;
+    font-size: 13px;
+    letter-spacing: 4px;
+    color: #00e5ff;
+    text-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+    font-weight: 400;
+    margin: 0;
+}
+.nc-viz-hud-title .nc-viz-hud-subtitle {
+    font-size: 10px;
+    color: #4a5a78;
+    letter-spacing: 2px;
+    margin-top: 2px;
+}
+
+/* 统计栏（右上角） */
+.nc-viz-hud-stats {
+    position: absolute;
+    top: 22px;
+    right: 72px;
+    z-index: 10;
+    display: flex;
+    gap: 14px;
+    font-family: monospace;
+    font-size: 11px;
+}
+.nc-viz-hud-stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.nc-viz-hud-stat .nc-viz-hud-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.nc-viz-hud-stat .nc-viz-hud-dot.c {
+    background: #00e5ff;
+    box-shadow: 0 0 6px #00e5ff;
+}
+.nc-viz-hud-stat .nc-viz-hud-dot.g {
+    background: #00ff88;
+    box-shadow: 0 0 6px #00ff88;
+}
+.nc-viz-hud-stat .nc-viz-hud-dot.r {
+    background: #ff2255;
+    box-shadow: 0 0 6px #ff2255;
+}
+.nc-viz-hud-stat .nc-viz-hud-dot.a {
+    background: #ffaa00;
+    box-shadow: 0 0 6px #ffaa00;
+}
+.nc-viz-hud-stat span {
+    color: #4a5a78;
+}
+.nc-viz-hud-stat strong {
+    color: #e8f0ff;
+    font-weight: 400;
+}
+
+/* 图例（左下角） */
+.nc-viz-hud-legend {
+    position: absolute;
+    bottom: 14px;
+    left: 14px;
+    z-index: 10;
+    background: rgba(8, 16, 32, 0.88);
+    border: 1px solid rgba(0, 180, 255, 0.12);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 140px;
+    backdrop-filter: blur(12px);
+}
+.nc-viz-hud-legend h3 {
+    font-family: monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: #00e5ff;
+    margin: 0 0 8px 0;
+    font-weight: 400;
+}
+.nc-viz-hud-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 5px;
+    font-size: 11px;
+    color: #b8c8e0;
+}
+.nc-viz-hud-legend-line {
+    width: 20px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+.nc-viz-hud-legend-line.green {
+    background: #00ff88;
+    box-shadow: 0 0 4px #00ff88;
+}
+.nc-viz-hud-legend-line.red {
+    background: #ff2255;
+    box-shadow: 0 0 4px #ff2255;
+}
+.nc-viz-hud-legend-node {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.nc-viz-hud-legend-node.ok {
+    background: radial-gradient(circle at 35% 35%, #66ffbb, #00aa66);
+    box-shadow: 0 0 4px #00ff88;
+}
+.nc-viz-hud-legend-node.err {
+    background: radial-gradient(circle at 35% 35%, #ff6688, #cc0033);
+    box-shadow: 0 0 4px #ff2255;
+}
+.nc-viz-hud-legend-node.warn {
+    background: radial-gradient(circle at 35% 35%, #ffcc44, #cc8800);
+    box-shadow: 0 0 4px #ffaa00;
+}
+
+/* 过滤按钮（底部中间） */
+.nc-viz-hud-filters {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    gap: 6px;
+}
+.nc-viz-hud-filters button {
+    background: rgba(8, 16, 32, 0.88);
+    border: 1px solid rgba(0, 180, 255, 0.12);
+    border-radius: 6px;
+    padding: 4px 12px;
+    color: #4a5a78;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.25s;
+    letter-spacing: 0.5px;
+    backdrop-filter: blur(12px);
+}
+.nc-viz-hud-filters button:hover,
+.nc-viz-hud-filters button.active {
+    color: #00e5ff;
+    border-color: #00e5ff;
+    background: rgba(0, 229, 255, 0.06);
+}
+
+/* 操作提示（右下角） */
+.nc-viz-hud-controls {
+    position: absolute;
+    bottom: 14px;
+    right: 14px;
+    z-index: 10;
+    font-family: monospace;
+    font-size: 10px;
+    color: #4a5a78;
+    text-align: right;
+    line-height: 1.8;
+    letter-spacing: 0.5px;
+}
+.nc-viz-hud-controls kbd {
+    background: rgba(0, 180, 255, 0.08);
+    border: 1px solid rgba(0, 180, 255, 0.12);
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: #b8c8e0;
+    font-size: 10px;
+    font-family: inherit;
+}
+
+/* 全屏按钮（右上角，与统计栏同排） */
+.nc-viz-hud-fullscreen {
+    position: absolute;
+    top: 14px;
+    right: 20px;
+    z-index: 12;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 16, 32, 0.88);
+    border: 1px solid rgba(0, 180, 255, 0.2);
+    border-radius: 6px;
+    color: #b8c8e0;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: all 0.2s;
+    padding: 0;
+}
+.nc-viz-hud-fullscreen svg {
+    width: 18px;
+    height: 18px;
+}
+.nc-viz-hud-fullscreen:hover {
+    color: #00e5ff;
+    border-color: rgba(0, 229, 255, 0.4);
+    background: rgba(0, 229, 255, 0.08);
+}
+.nc-viz-hud-fullscreen.active {
+    color: #00e5ff;
+    border-color: rgba(0, 229, 255, 0.5);
+}
+
+/* 全屏时容器背景 */
+.nc-viz-container:fullscreen,
+.nc-viz-container:-webkit-full-screen {
+    background: #060a14;
+}
+
+/* ========= 优化面板 - 审查视图 ========= */
+
+/* ─── 审查视图容器 ─── */
+.nca-optimize-review-view {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    gap: 12px;
+}
+
+/* ─── 底部操作栏 ─── */
+.nca-review-action-bar {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 12px 16px;
+    border-top: 1px solid var(--nca-border);
+    margin-top: auto;
+    flex-shrink: 0;
+}
+
+/* ─── "开始优化"按钮 ─── */
+.nca-review-start-optimize-btn {
+    background: linear-gradient(135deg, #00d4ff 0%, #0094ff 100%);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.nca-review-start-optimize-btn:hover:not(:disabled) {
+    transform: scale(1.02);
+    box-shadow: 0 6px 14px rgba(0, 148, 255, 0.3);
+}
+
+.nca-review-start-optimize-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ─── "返回对话"按钮（次要） ─── */
+.nca-review-back-btn {
+    background: transparent;
+    border: 1px solid var(--nca-border);
+    color: inherit;
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background var(--nca-transition-fast);
+}
+
+.nca-review-back-btn:hover {
+    background: var(--nca-hover-overlay);
+}
+
+/* ─── 顶部审查触发按钮（与工具栏风格一致） ─── */
+.nca-optimize-review-trigger {
+    background: transparent;
+    border: 1px solid var(--nca-border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background var(--nca-transition-fast);
+}
+
+.nca-optimize-review-trigger:hover {
+    background: var(--nca-hover-overlay);
+}
+
+/* ─── 深度选择下拉菜单 ─── */
+.nca-review-depth-menu {
+    position: absolute;
+    background: var(--nca-bg-elevated);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 100;
+}
+
+.nca-review-depth-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background var(--nca-transition-fast);
+}
+
+.nca-review-depth-item:hover {
+    background: var(--nca-hover-overlay);
+}
+
+/* ─── 节点详情面板（右侧滑出） ─── */
+.nc-viz-detail-panel {
+    position: absolute;
+    right: -360px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 320px;
+    max-height: 80%;
+    overflow-y: auto;
+    background: rgba(8, 16, 32, 0.95);
+    border: 1px solid rgba(0, 180, 255, 0.25);
+    border-radius: 8px;
+    padding: 18px;
+    backdrop-filter: blur(16px);
+    transition: right 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    z-index: 15;
+}
+.nc-viz-detail-panel.open { right: 20px; }
+.nc-viz-detail-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: none;
+    border: none;
+    color: #4a5a78;
+    font-size: 20px;
+    cursor: pointer;
+}
+.nc-viz-detail-close:hover { color: #00e5ff; }
+.nc-viz-detail-name {
+    font-family: monospace;
+    font-size: 14px;
+    color: #e8f0ff;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+.nc-viz-detail-type {
+    font-size: 11px;
+    color: #4a5a78;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+}
+.nc-viz-detail-status {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+.nc-viz-detail-status.normal {
+    background: rgba(0,255,136,0.12);
+    color: #00ff88;
+    border: 1px solid rgba(0,255,136,0.25);
+}
+.nc-viz-detail-status.error {
+    background: rgba(255,34,85,0.12);
+    color: #ff2255;
+    border: 1px solid rgba(255,34,85,0.25);
+}
+.nc-viz-detail-status.warning {
+    background: rgba(255,170,0,0.12);
+    color: #ffaa00;
+    border: 1px solid rgba(255,170,0,0.25);
+}
+.nc-viz-detail-desc {
+    font-size: 12px;
+    color: #b8c8e0;
+    line-height: 1.5;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(0,180,255,0.12);
+}
+/* 详细异常信息区域 */
+.nc-viz-detail-error-section {
+    margin-bottom: 14px;
+    padding: 8px 10px 8px 12px;
+    border-left: 3px solid #ff2255;
+    border-radius: 4px;
+    background: rgba(255,34,85,0.08);
+}
+.nc-viz-detail-error-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #ff2255;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+}
+.nc-viz-detail-error-content {
+    font-size: 12px;
+    color: #ffb3c4;
+    line-height: 1.5;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+/* 详细警告信息区域 */
+.nc-viz-detail-warning-section {
+    margin-bottom: 14px;
+    padding: 8px 10px 8px 12px;
+    border-left: 3px solid #ffaa00;
+    border-radius: 4px;
+    background: rgba(255,170,0,0.08);
+}
+.nc-viz-detail-warning-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #ffaa00;
+    margin-bottom: 6px;
+    letter-spacing: 1px;
+}
+.nc-viz-detail-warning-content {
+    font-size: 12px;
+    color: #ffe0a3;
+    line-height: 1.5;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+.nc-viz-detail-conn-title {
+    font-family: monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: #00e5ff;
+    margin-bottom: 8px;
+}
+.nc-viz-detail-conn {
+    list-style: none;
+    padding: 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.nc-viz-detail-conn li {
+    font-size: 11px;
+    padding: 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #b8c8e0;
+}
+.nc-viz-detail-conn .conn-arrow {
+    color: #00e5ff;
+    font-size: 12px;
+}
+
+/* ─── Tooltip（鼠标悬停） ─── */
+.nc-viz-tooltip {
+    position: fixed;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    background: rgba(8, 16, 32, 0.95);
+    border: 1px solid rgba(0, 180, 255, 0.25);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 11px;
+    white-space: nowrap;
+    backdrop-filter: blur(8px);
+    z-index: 20;
+}
+.nc-viz-tooltip.visible { opacity: 1; }
+.nc-viz-tooltip .tt-name { color: #e8f0ff; font-weight: 600; }
+.nc-viz-tooltip .tt-status { font-size: 10px; margin-top: 2px; }
+.nc-viz-tooltip .tt-status.normal { color: #00ff88; }
+.nc-viz-tooltip .tt-status.error { color: #ff2255; }
+.nc-viz-tooltip .tt-status.warning { color: #ffaa00; }
+
+/* ─── HUD 角标装饰 ─── */
+.nc-viz-hud-corner {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    pointer-events: none;
+    z-index: 8;
+}
+.nc-viz-hud-corner::before,
+.nc-viz-hud-corner::after {
+    content: '';
+    position: absolute;
+    background: #00e5ff;
+    opacity: 0.35;
+}
+.nc-viz-hud-corner.tl { top: 5px; left: 5px; }
+.nc-viz-hud-corner.tl::before { width: 28px; height: 2px; top: 0; left: 0; }
+.nc-viz-hud-corner.tl::after { width: 2px; height: 28px; top: 0; left: 0; }
+.nc-viz-hud-corner.tr { top: 5px; right: 5px; }
+.nc-viz-hud-corner.tr::before { width: 28px; height: 2px; top: 0; right: 0; }
+.nc-viz-hud-corner.tr::after { width: 2px; height: 28px; top: 0; right: 0; }
+.nc-viz-hud-corner.bl { bottom: 5px; left: 5px; }
+.nc-viz-hud-corner.bl::before { width: 28px; height: 2px; bottom: 0; left: 0; }
+.nc-viz-hud-corner.bl::after { width: 2px; height: 28px; bottom: 0; left: 0; }
+.nc-viz-hud-corner.br { bottom: 5px; right: 5px; }
+.nc-viz-hud-corner.br::before { width: 28px; height: 2px; bottom: 0; right: 0; }
+.nc-viz-hud-corner.br::after { width: 2px; height: 28px; bottom: 0; right: 0; }
+
+/* ═════════════════════════════════════════════════════════════
+   可视化容器折叠
+   ═════════════════════════════════════════════════════════════ */
+
+.nc-viz-container-wrapper {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.nc-viz-container-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--nca-fg-dim);
+    background: var(--nca-bg-secondary);
+    border-bottom: 1px solid var(--nca-border);
+    transition: color var(--nca-transition-fast);
+}
+
+.nc-viz-container-toggle:hover {
+    color: var(--nca-fg);
+}
+
+.nc-viz-container-toggle .arrow {
+    font-size: 9px;
+    color: var(--nca-accent);
+    transition: transform var(--nca-transition-normal);
+}
+
+.nc-viz-container-wrapper.collapsed .nc-viz-container-toggle .arrow {
+    transform: rotate(-90deg);
+}
+
+.nc-viz-container-wrapper.collapsed .nc-viz-container {
+    display: none;
+}
+
+.nc-viz-container-wrapper.collapsed .nca-viz-toolbar {
+    display: none;
+}

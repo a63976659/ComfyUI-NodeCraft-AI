@@ -1,0 +1,139 @@
+/* ═══════════════════════════════════════════════════════════════
+   Toast 通知系统 — Neo-Noir Hacker
+   全局右上角悬浮，多条堆叠，毛玻璃 + 类型化辉光描边
+   类型：success / warning / error / info
+   ═══════════════════════════════════════════════════════════════ */
+
+.nca-toast-container {
+    position: absolute;
+    top: var(--nca-space-xl);
+    right: var(--nca-space-xl);
+    z-index: var(--nca-z-toast);
+    display: flex;
+    flex-direction: column;
+    gap: var(--nca-space-sm);
+    pointer-events: none;
+}
+
+.nca-toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    border-radius: var(--nca-radius);
+    font-family: var(--nca-font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+    letter-spacing: 0.2px;
+    max-width: 360px;
+    min-width: 220px;
+    color: var(--nca-fg);
+    background: var(--nca-glass);
+    border: 1px solid var(--nca-border);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    opacity: 0;
+    transform: translateX(110%);
+    transition:
+        opacity var(--nca-transition-normal),
+        transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nca-toast-show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.nca-toast-hide {
+    opacity: 0;
+    transform: translateX(110%);
+}
+
+/* ─── 图标与文本 ─────────────────────────────────────────── */
+.nca-toast-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 50%;
+    background: var(--nca-btn-secondary-bg);
+}
+
+.nca-toast-msg {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+    color: var(--nca-fg);
+}
+
+.nca-toast-close {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 var(--nca-space-2xs);
+    transition: color var(--nca-transition-fast);
+}
+.nca-toast-close:hover {
+    color: var(--nca-fg);
+}
+
+/* ─── 类型化样式（左侧辉光条 + 图标着色） ─────────────────── */
+.nca-toast-success {
+    border-color: var(--nca-green-border);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(16, 185, 129, 0.15),
+        inset 3px 0 0 0 var(--nca-green);
+}
+.nca-toast-success .nca-toast-icon {
+    color: var(--nca-green);
+    background: var(--nca-green-dim);
+}
+
+.nca-toast-error {
+    border-color: var(--nca-error-border);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(239, 68, 68, 0.15),
+        inset 3px 0 0 0 var(--nca-error);
+}
+.nca-toast-error .nca-toast-icon {
+    color: var(--nca-error);
+    background: var(--nca-error-dim);
+}
+
+.nca-toast-warning {
+    border-color: var(--nca-warning-border);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(245, 158, 11, 0.15),
+        inset 3px 0 0 0 var(--nca-warning);
+}
+.nca-toast-warning .nca-toast-icon {
+    color: var(--nca-warning);
+    background: var(--nca-warning-bg);
+}
+
+.nca-toast-info {
+    border-color: var(--nca-info-border);
+    box-shadow:
+        0 10px 30px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(0, 212, 255, 0.15),
+        inset 3px 0 0 0 var(--nca-accent);
+}
+.nca-toast-info .nca-toast-icon {
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+}
