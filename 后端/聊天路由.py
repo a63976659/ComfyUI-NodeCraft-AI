@@ -431,7 +431,7 @@ async def _build_chat_context(request, session_id, message, attachments=None, pl
     ]
     # 本地模型视觉能力前置检查：不支持视觉的模型不注入图片附件，避免 Worker 推理崩溃
     if image_attachments and model_source == "local" and local_model_client is not None:
-        _local_model_name = settings.get("local_model_name", "")
+        _local_model_name = (data or {}).get("local_model_name") or settings.get("local_model_name", "")
         try:
             _supports_vision = local_model_client._supports_vision(_local_model_name)
             logger.info(
