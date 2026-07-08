@@ -152,9 +152,9 @@ class ContextManager:
             role = msg.get("role")
             content = msg.get("content", "")
 
-            # 防递归：已有摘要消息直接保留
+            # 防递归：已有摘要消息直接保留（强制 user 角色，避免 system 触发 chat template 校验）
             if isinstance(content, str) and content.startswith("[历史对话摘要]"):
-                preexisting_summaries.append({"role": role, "content": content})
+                preexisting_summaries.append({"role": "user", "content": content})
                 continue
 
             if role == "tool":
@@ -222,9 +222,9 @@ class ContextManager:
             # 极端情况：摘要仍超限，回退到简洁通知
             if current_tokens + summary_tokens > effective_budget:
                 notice = f"[注意: 之前的 {dropped} 条对话已被压缩省略]"
-                return preexisting_summaries + [{"role": "system", "content": notice}] + list(reversed(kept))
+                return preexisting_summaries + [{"role": "user", "content": notice}] + list(reversed(kept))
 
-            return preexisting_summaries + [{"role": "system", "content": summary_text}] + list(reversed(kept))
+            return preexisting_summaries + [{"role": "user", "content": summary_text}] + list(reversed(kept))
 
         return preexisting_summaries + list(reversed(kept))
 
@@ -284,10 +284,15 @@ class ContextManager:
         if not llm_client or not dropped_messages:
             return None
 
-        # 本地模型：检查是否已加载
+        # 本地模型：不使用 LLM 摘要，原因：
+        # 1. 摘要调用会阻塞 worker（handle_generate），上下文压缩在流式对话之前执行，
+        #    摘要超时取消后 worker 仍在处理，导致 stdout 管道出现两个 reader 线程的竞态
+        # 2. 被取消 generate 的 "done" 响应可能被后续 stream 的 reader 误读，
+        #    造成流式输出立即终止（0 token），前端表现为"无任何回复"
+        # 3. 本地模型 IDLE_TTL 卸载后，客户端 当前模型名 仍为旧值，
+        #    但 worker 已无模型，摘要调用会发送无效请求
         if model_source == "local":
-            if not getattr(llm_client, '当前模型名', None):
-                return None
+            return None
 
         # 缓存检查
         cache_key = hash(tuple(
@@ -355,7 +360,7 @@ class ContextManager:
         if len(压缩结果) < len(recent_messages):
             截断数 = len(recent_messages) - len(压缩结果)
             压缩结果.insert(0, {
-                "role": "system",
+                "role": "user",
                 "content": (
                     f"[注意: 之前的 {截断数} 条对话已被压缩省略，以节省上下文空间。"
                     f"请基于当前可见的对话继续。]"

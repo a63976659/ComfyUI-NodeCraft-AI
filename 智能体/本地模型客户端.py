@@ -48,22 +48,33 @@ _TOOL_INSTRUCTION_TEMPLATE = """
 4. `edit_file` - 增量编辑文件（参数：file_path, patch。patch 为 unified diff 补丁）
 5. `batch_edit` - 批量操作多个文件（参数：operations 数组，每个元素含 action/file_path/content）
 
-### 严格格式要求（极其重要）
+### ⚠️ 严格格式要求（必读，违反将导致调用失败）
 
-**唯一合法的工具调用格式**（必须严格遵守，标签内必须是完整JSON，不能有占位符）：
+**你只允许使用一种格式调用工具：`<tool_call>` 包裹的 JSON 格式。**
+
+正确格式（唯一合法）：
 ```
 <tool_call>{"name": "read_plugin_file", "arguments": {"file_path": "__init__.py"}}</tool_call>
 ```
 
-- `<tool_call>` 标签内必须是**有效的 JSON 对象**，不能是其他任何格式
-- JSON 对象必须包含 `name`（字符串）和 `arguments`（对象）两个字段
-- **严禁**使用 `<function=xxx>` 格式，这是错误格式，系统无法识别
-- **严禁**使用 `</arguments:` 这样的非标准写法
-- 每条消息最多包含一个工具调用
-- 工具调用后立即停止输出，等待 [工具结果] 反馈再继续
+核心规则：
+- `<tool_call>` 标签内**只能是完整的 JSON 对象**，不能是任何其他内容
+- JSON 对象必须包含 `"name"`（字符串）和 `"arguments"`（对象）两个字段
+- 每条消息最多包含一个工具调用，调用后立即停止输出
 - **禁止**用代码块展示文件内容代替实际写入操作
 
-### 正确调用示例
+### ❌ 绝对禁止的格式
+
+以下格式会导致调用**完全失败**，因为系统无法从中提取参数：
+
+- `<function=read_plugin_file>` — **禁止！** 这是 Qwen 模型的默认格式，但本系统不支持
+- `<function=write_plugin_file>...</function>` — **禁止！** 不要用 XML 标签包裹
+- `</arguments: {}` — **禁止！** 畸形格式
+- `<tool_call>{"file_path": "x.py"}</tool_call>` — **禁止！** 缺少 name 字段
+
+> **为什么 `<function=xxx>` 不行？** 因为这个格式没有 JSON 参数，系统无法知道你要操作哪个文件、写入什么内容。你必须用 `<tool_call>` + JSON 格式提供完整的参数。
+
+### ✅ 正确调用示例
 
 列出文件：
 <tool_call>{"name": "list_plugin_files", "arguments": {}}</tool_call>
@@ -74,22 +85,6 @@ _TOOL_INSTRUCTION_TEMPLATE = """
 写入文件：
 <tool_call>{"name": "write_plugin_file", "arguments": {"file_path": "hello.py", "content": "print('Hello World!')\\n"}}</tool_call>
 
-### 错误格式示例（绝对禁止）
-
-以下格式都是错误的，系统无法识别：
-
-❌ `<function=xxx>` ← 禁止，不要用 function 标签
-❌ `</arguments: {}` ← 禁止，畸形闭合标签
-❌ `<tool_call>{"file_path": "x.py"}</tool_call>` ← 禁止，缺少 name 字段
-❌ 只输出代码块而不调用工具 ← 禁止
-
-### 格式自检清单（每次调用前检查）
-
-1. ✅ 标签内是否有 `"name"` 字段？
-2. ✅ 标签内是否有 `"arguments"` 字段？
-3. ✅ 是否以 `</tool_call>` 正确闭合？
-4. ✅ 调用后是否立即停止输出？
-
 ### 工作流程
 
 当用户要求你创建或修改文件时：
@@ -99,9 +94,7 @@ _TOOL_INSTRUCTION_TEMPLATE = """
 4. 创建完整项目时用 batch_edit 一次创建多个文件
 5. 完成后告诉用户已创建/修改了哪些文件
 
-**最后提醒：每次调用工具后必须立即停止输出，等待工具结果返回后再继续。禁止在工具调用后继续生成其他内容。**
-
-**格式绝对规则**：只能使用 <tool_call> JSON 标签调用工具。任何其他格式（如 <function=xxx>）都是错误的，禁止使用。
+**最后提醒：你唯一可用的工具调用格式是 `<tool_call>JSON</tool_call>`。不要使用 `<function=xxx>` 或任何其他格式。**
 """
 
 
@@ -129,6 +122,7 @@ class LocalModelClient:
         self.失败黑名单过期秒 = 300
         self._current_quantization = "none"
         self._current_dtype = "float32"
+        self._is_multimodal = False  # 当前加载的模型是否支持视觉多模态
         # P3: 后台预热任务（消除首次推理 30s+ 加载延迟）
         self._预热任务: Optional[asyncio.Task] = None
         self._预热延迟 = 30
@@ -481,6 +475,7 @@ class LocalModelClient:
             info = resp.get("info", "")
             # 解析 worker 返回的加速信息，更新本地状态
             self._解析加速信息(info)
+            self._is_multimodal = resp.get("is_multimodal", False)
             logger.info(f"✅ 本地模型加载成功: {self.当前模型名} ({info})")
 
     async def _等待worker加载结果(self, 模型名: str) -> dict:
@@ -541,6 +536,7 @@ class LocalModelClient:
         self.当前模型名 = None
         self._current_quantization = "none"
         self._current_dtype = "float32"
+        self._is_multimodal = False
 
     def 卸载模型(self):
         """主动卸载模型释放显存（同步版本）"""
@@ -688,15 +684,77 @@ class LocalModelClient:
     #  视觉能力检测
     # ============================================================
 
-    def _supports_vision(self) -> bool:
-        """本地推理客户端多模态占位
+    def _supports_vision(self, model_name: str = None) -> bool:
+        """检测当前本地模型是否支持视觉多模态
 
-        本地 transformers 多模态推理（如 Qwen2-VL、LLaVA）需额外的
-        AutoProcessor + image_processor + Chat Template。当前未接入，
-        统一返回 False，让有附件的请求退回为文本描述。
-        后续如需启用，可根据 self.当前模型名 判断并通过 worker 调用 processor。
+        优先使用 Worker 加载时返回的 is_multimodal 标志。
+        若模型未加载（或被空闲卸载），则读取 config.json 离线检测，
+        避免模型未加载时误报"不支持图片分析"。
+
+        Args:
+            model_name: 可选，外部传入的模型名（如路由层从请求中读取的）。
+                        优先于设置文件中的值，避免刚切换模型但设置尚未落盘时读到旧值。
         """
+        if self._is_multimodal:
+            return True
+        # 模型未加载时，从 config.json 离线检测
+        model_path = self._获取模型路径(model_name)
+        if model_path is None:
+            logger.debug(f"[视觉检测] 无法解析模型路径 (model_name={model_name!r})")
+            return False
+        config_path = Path(model_path) / "config.json"
+        if not config_path.exists():
+            logger.debug(f"[视觉检测] config.json 不存在: {config_path}")
+            return False
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            # 检查 architectures 字段是否包含视觉模型类名
+            for arch in config.get("architectures", []):
+                arch_lower = str(arch).lower()
+                if any(kw in arch_lower for kw in ["vl", "vision", "visual", "imagetext", "multimodal"]):
+                    return True
+            # 检查是否存在 vision_config（Qwen3.5 等模型的核心标志）
+            if "vision_config" in config:
+                return True
+            # 检查 preprocessor_config.json 是否包含视觉处理器类名
+            preprocessor_path = Path(model_path) / "preprocessor_config.json"
+            if preprocessor_path.exists():
+                try:
+                    with open(preprocessor_path, 'r', encoding='utf-8') as f:
+                        pre_config = json.load(f)
+                    proc_class = str(pre_config.get("processor_class", "")).lower()
+                    if any(kw in proc_class for kw in ["vl", "vision", "visual", "multimodal"]):
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return False
+
+    def _获取模型路径(self, model_name: str = None) -> Optional[str]:
+        """从设置中获取当前配置的本地模型路径（不依赖模型是否已加载）
+
+        Args:
+            model_name: 外部传入的模型名，优先于设置文件中的值。
+        """
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = {}
+        # 有自定义路径时直接返回（优先级最高）
+        local_path = (settings.get("local_path") or "").strip()
+        if local_path:
+            return local_path
+        # 使用模型名拼接默认路径
+        local_model_name = (model_name or "").strip()
+        if not local_model_name:
+            # 回退到设置文件中的值
+            local_model_name = (settings.get("local_model_name") or "").strip()
+        if local_model_name:
+            from 后端.系统环境映射 import get_default_llm_path
+            return str(get_default_llm_path() / local_model_name)
+        return None
 
     # ============================================================
     #  非流式推理
@@ -729,6 +787,8 @@ class LocalModelClient:
                 entry["tool_calls"] = msg["tool_calls"]
             if "tool_call_id" in msg:
                 entry["tool_call_id"] = msg["tool_call_id"]
+            if "_image_attachments" in msg:
+                entry["_image_attachments"] = msg["_image_attachments"]
             formatted_messages.append(entry)
 
         async with self._获取异步锁():
@@ -753,7 +813,10 @@ class LocalModelClient:
                     result = resp.get("full_text", "")
                     # 代理层双保险：与 worker._strip_thinking 保持一致，同时支持 Qwen3.5 的 <think> 和 Qwen3 的 <thinking>
                     result = re.sub(r'<think>[\s\S]*?</think>', '', result)
-                    result = re.sub(r'<thinking>[\s\S]*?</thinking>', '', result).strip()
+                    result = re.sub(r'<thinking>[\s\S]*?</thinking>', '', result)
+                    # 清理孤立闭合标签（tokenizer skip_special_tokens 已移除 <think>）
+                    result = re.sub(r'</think>', '', result)
+                    result = re.sub(r'</thinking>', '', result).strip()
                     self._性能.记录请求(time.time() - 开始时间, True)
                     return result
 
@@ -828,7 +891,9 @@ class LocalModelClient:
                     result = resp.get("response", "")
                     # thinking 标签剥离（双保险，与 generate_response 一致）
                     result = re.sub(r'<think>[\s\S]*?</think>', '', result)
-                    result = re.sub(r'<thinking>[\s\S]*?</thinking>', '', result).strip()
+                    result = re.sub(r'<thinking>[\s\S]*?</thinking>', '', result)
+                    result = re.sub(r'</think>', '', result)
+                    result = re.sub(r'</thinking>', '', result).strip()
                     return result
                 else:
                     return ""
@@ -964,6 +1029,7 @@ class LocalModelClient:
 
         # 清理消息中的非标准字段（保留 name/tool_calls/tool_call_id 以支持 Qwen3.5 tool 角色）
         sanitized_messages = []
+        _has_images = False
         for m in messages:
             if not isinstance(m, dict):
                 continue
@@ -974,7 +1040,15 @@ class LocalModelClient:
                 msg["tool_calls"] = m["tool_calls"]
             if "tool_call_id" in m:
                 msg["tool_call_id"] = m["tool_call_id"]
+            if "_image_attachments" in m:
+                msg["_image_attachments"] = m["_image_attachments"]
+                _has_images = True
             sanitized_messages.append(msg)
+        logger.info(
+            f"[流式对话] messages总数={len(sanitized_messages)}, "
+            f"_has_images={_has_images}, "
+            f"_is_multimodal={self._is_multimodal}"
+        )
 
         async with self._获取异步锁():
             try:
@@ -1209,6 +1283,9 @@ class LocalModelClient:
                 # 所有调用都是空参数失败（裸标签格式错误）
                 # 不添加 assistant 消息，避免模型在下一轮看到自己的错误格式并重复
                 logger.info("[工具调用] 所有调用都是空参数失败（裸标签），不保留错误的 assistant 消息")
+                # 向用户输出可见提示（否则用户看到的是空白输出）
+                _tool_names = ', '.join(c.get('name', '?') for c in calls)
+                yield f"\n⚠️ 模型使用了非标准格式调用工具（{_tool_names}），正在自动纠正...\n"
             else:
                 # 正常情况：添加 assistant 消息（含工具调用结构）
                 assistant_msg = {"role": "assistant", "content": content.strip()}

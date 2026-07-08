@@ -58,6 +58,19 @@ def _parse_function_tag_fallback(raw: str) -> dict | None:
                         arguments = parsed_args
                 except (json.JSONDecodeError, ValueError):
                     logger.debug("<function=> 变体中 arguments 解析失败，使用空参数: %s", args_raw[:100])
+            else:
+                # JSON 未找到，尝试 XML 参数格式：<parameter=key>value</parameter>
+                # Qwen3.5 在 <function=xxx> 标签后常输出此格式
+                _rem = raw[m.end():].strip()
+                _xml_args = {}
+                for _pm in re.finditer(r'<parameter=([\w]+)\s*>(.*?)</parameter\s*>', _rem, re.DOTALL):
+                    _xml_args[_pm.group(1)] = _pm.group(2)
+                if _xml_args:
+                    arguments = _xml_args
+                    logger.info(
+                        "[兜底解析] <function=%s> 内提取到 XML 参数: %s",
+                        func_name, list(_xml_args.keys()),
+                    )
             logger.warning(
                 "[兜底解析] 检测到非标准 <function=%s> 格式，已转换为 JSON 工具调用。"
                 " 请检查系统提示是否正确注入。",

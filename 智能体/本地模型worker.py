@@ -113,6 +113,7 @@ logger = logging.getLogger("local_model_worker")
 _HAS_BITSANDBYTES = False
 _HAS_FLASH_ATTN = False
 _HAS_INFERENCE_MODE = False
+_HAS_PIL = False
 
 try:
     import bitsandbytes  # noqa: F401
@@ -130,6 +131,13 @@ try:
     import torch as _torch_check
     _HAS_INFERENCE_MODE = hasattr(_torch_check, "inference_mode")
     del _torch_check
+except ImportError:
+    pass
+
+try:
+    from PIL import Image as _PIL_check  # noqa: F401
+    _HAS_PIL = True
+    del _PIL_check
 except ImportError:
     pass
 
@@ -206,6 +214,9 @@ class ModelWorker:
         self._current_dtype = "float32"
         self._idle_timer: threading.Timer | None = None
         self._blacklist: dict[str, float] = {}  # {model_name: fail_timestamp}
+        self.is_multimodal = False
+        self.processor = None  # 多模态处理器（AutoProcessor），文本模型为 None
+        self._stream_gen_error = None  # 流式生成线程异常信息（非 None 表示崩溃）
 
     # ----------------------------------------------------------
     #  黑名单管理
@@ -222,6 +233,42 @@ class ModelWorker:
 
     def _add_to_blacklist(self, name: str):
         self._blacklist[name] = time.time()
+
+    # ----------------------------------------------------------
+    #  多模态检测
+    # ----------------------------------------------------------
+
+    def _detect_multimodal(self, model_path: str) -> bool:
+        """检测模型是否为多模态视觉语言模型（VLM）"""
+        try:
+            config_path = Path(model_path) / "config.json"
+            if not config_path.exists():
+                return False
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            # 检查 architectures 字段是否包含视觉模型类名
+            architectures = config.get("architectures", [])
+            for arch in architectures:
+                arch_lower = str(arch).lower()
+                if any(kw in arch_lower for kw in ["vl", "vision", "visual", "imagetext", "multimodal"]):
+                    return True
+            # 检查是否存在 vision_config（Qwen3.5 等模型的核心标志）
+            if "vision_config" in config:
+                return True
+            # 检查 preprocessor_config.json 是否包含视觉处理器类名
+            preprocessor_path = Path(model_path) / "preprocessor_config.json"
+            if preprocessor_path.exists():
+                try:
+                    with open(preprocessor_path, 'r', encoding='utf-8') as f:
+                        pre_config = json.load(f)
+                    proc_class = str(pre_config.get("processor_class", "")).lower()
+                    if any(kw in proc_class for kw in ["vl", "vision", "visual", "multimodal"]):
+                        return True
+                except Exception:
+                    pass
+            return False
+        except Exception:
+            return False
 
     # ----------------------------------------------------------
     #  停止信号（哨兵文件）
@@ -281,6 +328,8 @@ class ModelWorker:
             del self.model
             self.model = None
         self.tokenizer = None
+        self.processor = None
+        self.is_multimodal = False
         self.model_name = None
         try:
             import torch
@@ -340,8 +389,75 @@ class ModelWorker:
     #  Chat Template 辅助
     # ----------------------------------------------------------
 
+    # ----------------------------------------------------------
+    #  图片附件提取（多模态）
+    # ----------------------------------------------------------
+
+    def _extract_images_from_messages(self, messages: list) -> list:
+        """将含图消息的 content 转换为 VLM 多模态 list 格式，图片直接嵌入 content。
+
+        processor.apply_chat_template() 会自动处理图片 tokenization 和 pixel_values 提取。
+        格式：{"type": "image", "image": PIL_Image}
+
+        Returns:
+            messages: 转换后的消息列表（含图消息 content 变为 list 格式，图片已嵌入）
+        """
+        if not self.is_multimodal:
+            logger.info(
+                f"[_extract_images] is_multimodal=False，丢弃图片附件 "
+                f"(model_name={self.model_name!r})"
+            )
+            for m in messages:
+                m.pop("_image_attachments", None)
+            return messages
+
+        import base64
+        import io
+        from PIL import Image
+
+        new_messages = []
+        total_images = 0
+        for m in messages:
+            msg = dict(m)
+            img_attachments = msg.pop("_image_attachments", None)
+
+            if img_attachments:
+                logger.info(
+                    f"[_extract_images] 发现 {len(img_attachments)} 个图片附件，"
+                    f"开始解码 (role={msg.get('role')!r})"
+                )
+                content_parts = []
+                for att in img_attachments:
+                    try:
+                        raw_data = att.get("data", "")
+                        # 前端 readAsDataURL 返回完整 data URL（含 data:image/...;base64, 前缀），
+                        # 需剥离前缀再 base64 解码
+                        if raw_data.startswith("data:") and ";base64," in raw_data:
+                            raw_data = raw_data.split(";base64,", 1)[1]
+                        img_data = base64.b64decode(raw_data)
+                        pil_img = Image.open(io.BytesIO(img_data)).convert("RGB")
+                        content_parts.append({"type": "image", "image": pil_img})
+                        total_images += 1
+                        logger.info(
+                            f"[_extract_images] 图片解码成功: "
+                            f"size={pil_img.size}, mode={pil_img.mode}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[_extract_images] 图片解码失败（跳过）: {e}")
+                content_parts.append({"type": "text", "text": msg.get("content", "")})
+                msg["content"] = content_parts
+
+            new_messages.append(msg)
+
+        logger.info(f"[_extract_images] 完成: total_images={total_images}")
+        return new_messages
+
+    # ----------------------------------------------------------
+    #  Chat Template 辅助
+    # ----------------------------------------------------------
+
     def _apply_chat_template(self, messages: list, enable_thinking: bool = True) -> str:
-        """应用 chat template，支持动态控制 thinking 模式
+        """应用 chat template（文本模式），返回渲染后的文本字符串。
 
         Args:
             messages: 消息列表
@@ -365,6 +481,51 @@ class ModelWorker:
                     "⚠️ Qwen3 模型不支持 enable_thinking，建议升级 transformers >= 4.51.0"
                 )
         return text
+
+    def _prepare_inputs(
+        self, messages: list, enable_thinking: bool = True, is_tool_round: bool = False
+    ) -> dict:
+        """推理输入准备：VLM 用 processor.apply_chat_template 一步法，
+        文本模型用 tokenizer 直接编码。
+
+        一步法同时处理文本 tokenization 和图片 pixel_values 提取，
+        保证图片占位符与视觉特征正确对齐。
+        """
+        if self.is_multimodal:
+            # VLM：processor 一步完成模板渲染 + tokenization + 图片编码
+            try:
+                inputs = self.processor.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                    enable_thinking=enable_thinking,
+                )
+            except TypeError:
+                inputs = self.processor.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+            logger.info(
+                f"[_prepare_inputs] VLM一步法, prompt长度={inputs['input_ids'].shape[1]}, "
+                f"keys={list(inputs.keys())}, enable_thinking={enable_thinking}, "
+                f"is_tool_round={is_tool_round}"
+            )
+        else:
+            text = self._apply_chat_template(messages, enable_thinking=enable_thinking)
+            inputs = self.tokenizer(text, return_tensors="pt")
+            logger.info(
+                f"[_prepare_inputs] 文本模式, prompt长度={inputs['input_ids'].shape[1]}, "
+                f"enable_thinking={enable_thinking}, is_tool_round={is_tool_round}"
+            )
+
+        with self._lock:
+            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        return inputs
 
     # ----------------------------------------------------------
     #  动态 token 上限计算
@@ -418,10 +579,17 @@ class ModelWorker:
 
     @staticmethod
     def _strip_thinking(text: str) -> str:
-        """剥离思考内容，兼容 Qwen3 的 thinking 和 Qwen3.5 的 think 标签"""
+        """剥离思考内容，兼容 Qwen3 的 thinking 和 Qwen3.5 的 think 标签
+
+        注意：TextIteratorStreamer 的 skip_special_tokens=True 会跳过 <think> 特殊 token，
+        但 </think> 不是特殊 token 会保留。此函数也清理这种孤立闭合标签。
+        """
         # Qwen3.5 使用 <think>...</think>，Qwen3 使用 <thinking>...</thinking>
         text = re.sub(r"<think>[\s\S]*?</think>", "", text)
         text = re.sub(r"<thinking>[\s\S]*?</thinking>", "", text)
+        # 清理孤立闭合标签（<think> 开头已被 tokenizer 跳过，只剩 </think>）
+        text = re.sub(r"</think>", "", text)
+        text = re.sub(r"</thinking>", "", text)
         return text.strip()
 
     def handle_load(self, request: dict):
@@ -453,7 +621,7 @@ class ModelWorker:
         # 如果已加载相同模型，直接返回
         if self.model is not None and self.model_name == name:
             accel = f"量化={self._current_quantization}, dtype={self._current_dtype}"
-            send_response({"type": "loaded", "model_name": name, "info": accel})
+            send_response({"type": "loaded", "model_name": name, "info": accel, "is_multimodal": self.is_multimodal})
             return
 
         send_response({"type": "progress", "message": f"正在加载模型: {name}..."})
@@ -468,12 +636,28 @@ class ModelWorker:
                     if self.model is not None:
                         self._cleanup_memory()
 
-                send_response({"type": "progress", "message": "正在加载分词器..."})
-                tokenizer = AutoTokenizer.from_pretrained(
-                    model_path, trust_remote_code=True
-                )
-                if tokenizer.pad_token is None:
-                    tokenizer.pad_token = tokenizer.eos_token
+                is_vlm = self._detect_multimodal(model_path)
+                if is_vlm and not _HAS_PIL:
+                    logger.warning("模型为多模态视觉模型，但 Pillow 未安装，将以文本模式加载（图片功能不可用）")
+                    is_vlm = False
+
+                if is_vlm:
+                    send_response({"type": "progress", "message": "正在加载多模态处理器..."})
+                    from transformers import AutoProcessor
+                    processor = AutoProcessor.from_pretrained(
+                        model_path, trust_remote_code=True
+                    )
+                    tokenizer = getattr(processor, "tokenizer", processor)
+                    if tokenizer.pad_token is None:
+                        tokenizer.pad_token = tokenizer.eos_token
+                else:
+                    send_response({"type": "progress", "message": "正在加载分词器..."})
+                    processor = None
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_path, trust_remote_code=True
+                    )
+                    if tokenizer.pad_token is None:
+                        tokenizer.pad_token = tokenizer.eos_token
 
                 # 获取显存上限
                 max_memory = None
@@ -484,26 +668,45 @@ class ModelWorker:
                     max_memory = {0: f"{int(total_mem)}GiB"}
 
                 send_response({"type": "progress", "message": "正在加载模型权重..."})
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True,
-                    max_memory=max_memory,
-                    **model_kwargs,
-                )
+                if is_vlm:
+                    # 视觉语言模型：优先使用 AutoModelForImageTextToText，不可用时回退
+                    try:
+                        from transformers import AutoModelForImageTextToText as _VLMClass
+                    except ImportError:
+                        _VLMClass = AutoModelForCausalLM
+                    model = _VLMClass.from_pretrained(
+                        model_path,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        max_memory=max_memory,
+                        **model_kwargs,
+                    )
+                else:
+                    model = AutoModelForCausalLM.from_pretrained(
+                        model_path,
+                        device_map="auto",
+                        trust_remote_code=True,
+                        low_cpu_mem_usage=True,
+                        max_memory=max_memory,
+                        **model_kwargs,
+                    )
 
                 with self._lock:
                     self.model = model
                     self.tokenizer = tokenizer
+                    self.processor = processor
+                    self.is_multimodal = is_vlm
                     self.model_name = name
 
                 accel = f"量化={self._current_quantization}, dtype={self._current_dtype}"
+                if is_vlm:
+                    accel += ", 多模态=✓"
                 if _HAS_FLASH_ATTN and torch.cuda.is_available():
                     accel += ", FlashAttn2=✓"
 
                 logger.info(f"✅ 模型加载成功: {name} ({accel})")
-                send_response({"type": "loaded", "model_name": name, "info": accel})
+                send_response({"type": "loaded", "model_name": name, "info": accel, "is_multimodal": is_vlm})
                 return
 
             except Exception as exc:
@@ -559,27 +762,34 @@ class ModelWorker:
                 msg["tool_calls"] = m["tool_calls"]
             if "tool_call_id" in m:
                 msg["tool_call_id"] = m["tool_call_id"]
+            if "_image_attachments" in m:
+                msg["_image_attachments"] = m["_image_attachments"]
             sanitized.append(msg)
 
-        text = self._apply_chat_template(sanitized, enable_thinking=enable_thinking)
+        # 图片附件转换（VLM：解码图片嵌入 content；文本模型：丢弃）
+        sanitized = self._extract_images_from_messages(sanitized)
 
-        with self._lock:
-            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        # 推理输入准备（VLM：processor.apply_chat_template 一步法；文本：tokenizer）
+        inputs = self._prepare_inputs(sanitized, enable_thinking=enable_thinking, is_tool_round=is_tool_round)
 
         prompt_length = inputs["input_ids"].shape[1]
         max_new_tokens = self._calc_max_new_tokens(prompt_length, is_tool_round=is_tool_round)
 
         def _generate():
+            # 根据 thinking 模式调整参数，对齐 Qwen3 官方推荐
+            if enable_thinking:
+                temperature, top_p = 0.6, 0.95
+            else:
+                temperature, top_p = 0.7, 0.8
             ctx = (
                 torch.inference_mode() if _HAS_INFERENCE_MODE else torch.no_grad()
             )
             with ctx:
                 outputs = self.model.generate(
-                    inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
+                    **inputs,
                     max_new_tokens=max_new_tokens,
-                    temperature=0.6,
-                    top_p=0.95,
+                    temperature=temperature,
+                    top_p=top_p,
                     top_k=20,
                     repetition_penalty=1.0,
                     do_sample=True,
@@ -701,6 +911,18 @@ class ModelWorker:
         enable_thinking = settings.get("enable_thinking", True)
         is_tool_round = settings.get("is_tool_round", False)
 
+        # 诊断：检查消息中是否包含图片附件
+        _img_msg_indices = []
+        for i, m in enumerate(messages):
+            if isinstance(m, dict) and m.get("_image_attachments"):
+                _img_msg_indices.append(i)
+        logger.info(
+            f"[handle_stream] 收到 {len(messages)} 条消息, "
+            f"含图片附件的消息索引={_img_msg_indices}, "
+            f"is_multimodal={self.is_multimodal}, "
+            f"model_name={self.model_name!r}"
+        )
+
         # 取消空闲定时器
         self._cancel_idle_timer()
 
@@ -725,27 +947,34 @@ class ModelWorker:
                 msg["tool_calls"] = m["tool_calls"]
             if "tool_call_id" in m:
                 msg["tool_call_id"] = m["tool_call_id"]
+            if "_image_attachments" in m:
+                msg["_image_attachments"] = m["_image_attachments"]
             sanitized.append(msg)
 
-        text = self._apply_chat_template(sanitized, enable_thinking=enable_thinking)
-        logger.info(f"[handle_stream] 模板渲染完成, prompt长度={len(text)}, enable_thinking={enable_thinking}, is_tool_round={is_tool_round}")
+        # 图片附件转换（VLM：解码图片嵌入 content；文本模型：丢弃）
+        sanitized = self._extract_images_from_messages(sanitized)
 
-        with self._lock:
-            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        # 推理输入准备（VLM：processor.apply_chat_template 一步法；文本：tokenizer）
+        inputs = self._prepare_inputs(sanitized, enable_thinking=enable_thinking, is_tool_round=is_tool_round)
 
         prompt_length = inputs["input_ids"].shape[1]
         max_new_tokens = self._calc_max_new_tokens(prompt_length, is_tool_round=is_tool_round)
         logger.info(f"[handle_stream] 开始生成, input_ids形状={inputs['input_ids'].shape}, max_new_tokens={max_new_tokens}")
 
         if streamer_available:
-            self._do_stream(inputs, prompt_length, max_new_tokens)
+            self._do_stream(inputs, prompt_length, max_new_tokens, enable_thinking=enable_thinking)
         else:
             # 退化为非流式，一次性输出
             logger.warning("TextIteratorStreamer 不可用，退化为非流式模式")
             self._do_stream_fallback(inputs, prompt_length, max_new_tokens)
 
-    def _do_stream(self, inputs, prompt_length: int, max_new_tokens: int):
-        """使用 TextIteratorStreamer 进行流式推理"""
+    def _do_stream(self, inputs, prompt_length: int, max_new_tokens: int, enable_thinking: bool = True):
+        """使用 TextIteratorStreamer 进行流式推理
+
+        生成参数对齐 Qwen3 官方推荐：
+        - Thinking 模式：temperature=0.6, top_p=0.95, top_k=20
+        - Non-thinking 模式：temperature=0.7, top_p=0.8, top_k=20
+        """
         import torch
         from transformers import TextIteratorStreamer
 
@@ -753,12 +982,17 @@ class ModelWorker:
             self.tokenizer, skip_prompt=True, skip_special_tokens=True
         )
 
+        # 根据 thinking 模式调整生成参数，对齐官方推荐
+        if enable_thinking:
+            temperature, top_p = 0.6, 0.95
+        else:
+            temperature, top_p = 0.7, 0.8
+
         generate_kwargs = {
-            "input_ids": inputs["input_ids"],
-            "attention_mask": inputs["attention_mask"],
+            **inputs,
             "max_new_tokens": max_new_tokens,
-            "temperature": 0.6,
-            "top_p": 0.95,
+            "temperature": temperature,
+            "top_p": top_p,
             "top_k": 20,
             "repetition_penalty": 1.0,
             "do_sample": True,
@@ -803,6 +1037,15 @@ class ModelWorker:
         finally:
             gen_thread.join(timeout=5)
 
+        # 检查生成线程是否崩溃（_generate_thread 设置 _stream_gen_error 后调用 streamer.end()）
+        if self._stream_gen_error is not None:
+            error_msg = self._stream_gen_error
+            self._stream_gen_error = None  # 重置
+            logger.error(f"[_do_stream] 生成线程崩溃: {error_msg}")
+            send_response({"type": "error", "message": f"推理异常: {error_msg}"})
+            self._reset_idle_timer()
+            return
+
         logger.info(f"[_do_stream] 生成完成, 新token数={_token_count}")
         full_text = self._strip_thinking(full_text)
         self._reset_idle_timer()
@@ -818,8 +1061,7 @@ class ModelWorker:
             )
             with ctx:
                 outputs = self.model.generate(
-                    inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
+                    **inputs,
                     max_new_tokens=max_new_tokens,
                     temperature=0.6,
                     top_p=0.95,
@@ -846,7 +1088,12 @@ class ModelWorker:
             send_response({"type": "error", "message": f"推理异常: {exc}"})
 
     def _generate_thread(self, generate_kwargs: dict):
-        """子线程运行 model.generate()（流式模式）"""
+        """子线程运行 model.generate()（流式模式）
+
+        异常处理：崩溃时设置 _stream_gen_error 并调用 streamer.end() 解除
+        _do_stream 中 for token_text in streamer 的永久阻塞，使主线程能
+        够退出并发送错误响应给客户端。
+        """
         import torch
         try:
             ctx = (
@@ -856,6 +1103,14 @@ class ModelWorker:
                 self.model.generate(**generate_kwargs)
         except Exception as exc:
             logger.exception(f"流式生成线程异常: {exc}")
+            self._stream_gen_error = str(exc)
+            # 解除 streamer 永久阻塞，让 _do_stream 的 for 循环退出
+            streamer = generate_kwargs.get("streamer")
+            if streamer is not None:
+                try:
+                    streamer.end()
+                except Exception:
+                    pass
 
     # ----------------------------------------------------------
     #  handle_unload
@@ -879,6 +1134,7 @@ class ModelWorker:
             "model_name": self.model_name or "",
             "quantization": self._current_quantization,
             "dtype": self._current_dtype,
+            "is_multimodal": self.is_multimodal,
             "has_bitsandbytes": _HAS_BITSANDBYTES,
             "has_flash_attn": _HAS_FLASH_ATTN,
         })

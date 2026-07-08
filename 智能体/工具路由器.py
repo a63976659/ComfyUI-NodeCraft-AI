@@ -391,331 +391,44 @@ class BM25Index:
 
 # ─── 知识库索引单例（lazy init） ────────────────────────────
 
-# Tab 逻辑标识符到中文文件夹名的映射（前端传入英文 tab，后端落盘为中文目录）
-TAB_FOLDER_MAP = {
-    "develop": "开发插件",
-    "optimize": "优化插件",
-    "visualize": "功能可视化",
-}
-
 _bm25_instances: dict = {"develop": None, "optimize": None, "visualize": None}
-_bm25_知识库路径们: dict = {"develop": None, "optimize": None, "visualize": None}
 _tfidf_instances: dict = {"develop": None, "optimize": None, "visualize": None}
-_tfidf_知识库路径们: dict = {"develop": None, "optimize": None, "visualize": None}
-
-
-def _check_and_heal_knowledge_base(tab: str, 知识库路径: Path) -> int:
-    """统计知识库目录下的有效知识文件数量
-
-    有效知识文件指 .md 内容文件，但排除占位/说明文件 README.md；
-    .gitkeep 非 .md 文件，天然被 rglob("*.md") 排除。
-
-    Returns:
-        int: 有效 .md 文件数量（0 表示目录为空、不存在或仅含占位文件）
-
-    说明：
-      知识库内容已从代码仓库移除，改为用户登录后从云端同步获取。
-      因此首次安装时本地知识库为空属于正常状态，不再触发自愈重建，
-      仅由调用方记录友好提示后优雅降级为空索引。
-    """
-    if not 知识库路径.exists():
-        return 0
-
-    return sum(
-        1 for f in 知识库路径.rglob("*.md")
-        if f.name.lower() != "readme.md"
-    )
-
-
-def _auto_heal_kb_files(tab: str, 知识库路径: Path):
-    """从内置默认内容重建知识库文件
-
-    仅对 optimize 和 visualize Tab 提供默认内容。
-    develop Tab 文件较多，仅记录警告不自动重建。
-    """
-    _DEFAULT_FILES = {
-        "optimize": {
-            "插件性能优化指南.md": (
-                "# 插件性能优化指南\n\n"
-                "## 概述\nComfyUI 插件的性能优化是提升用户体验的关键。\n\n"
-                "## 节点执行优化\n\n"
-                "### 减少不必要的计算\n"
-                "- 使用 `IS_CHANGED()` 方法控制节点重新执行的时机\n"
-                "- 对于输入未变化的节点，跳过重复计算\n\n"
-                "### 批量处理\n"
-                "- 对多张图片使用批量处理而非逐张处理\n"
-                "- 合并相似操作减少 CPU/GPU 切换开销\n\n"
-                "## 内存管理\n\n"
-                "### 张量释放\n"
-                "- 及时释放不再使用的中间张量\n"
-                "- 使用 `del` 和 `torch.cuda.empty_cache()` 释放显存\n\n"
-                "### 模型加载优化\n"
-                "- 模型按需加载，避免启动时全部加载\n"
-                "- 使用单例模式共享模型实例\n\n"
-                "## 性能监控\n\n"
-                "### 自定义性能检测\n"
-                "```python\nimport time\nclass MyNode:\n"
-                "    def execute(self, **kwargs):\n"
-                "        start = time.time()\n"
-                "        result = self._heavy_computation(**kwargs)\n"
-                "        print(f'[性能] 执行耗时: {time.time()-start:.2f}秒')\n"
-                "        return result\n```\n\n"
-                "## 常见性能问题\n\n"
-                "### 节点执行缓慢\n- 检查是否有重复计算\n- 使用 profiler 定位热点函数\n\n"
-                "### 内存泄漏\n- 检查张量是否正确释放\n- 避免全局变量持有大对象\n"
-            ),
-        },
-        "visualize": {
-            "节点关系分析.md": (
-                "# 节点关系与功能可视化分析\n\n"
-                "## 概述\n功能可视化帮助开发者理解插件的节点结构和数据流。\n\n"
-                "## 节点类型分类\n"
-                "- **输入节点**：加载图片、模型、文本等外部资源\n"
-                "- **处理节点**：对输入数据进行变换\n"
-                "- **输出节点**：将结果保存到文件或显示在界面\n"
-                "- **控制节点**：条件分支、循环、延迟等流程控制\n\n"
-                "## 节点连接分析\n"
-                "```python\ndef analyze_connections(node):\n"
-                "    inputs = node.INPUT_TYPES()\n"
-                "    outputs = node.RETURN_TYPES\n"
-                "    return inputs, outputs\n```\n\n"
-                "## 插件结构可视化\n"
-                "```python\ndef generate_node_manifest(mapping):\n"
-                "    return {name: cls.__name__ for name, cls in mapping.items()}\n```\n\n"
-                "## 依赖关系分析\n"
-                "```python\ndef analyze_dependencies(node_class):\n"
-                "    input_types = node_class.INPUT_TYPES()\n"
-                "    return {name: spec[0] for name, spec in input_types.get('required', {}).items()}\n```\n"
-            ),
-        },
-    }
-
-    defaults = _DEFAULT_FILES.get(tab)
-    if not defaults:
-        logger.warning(f"Tab '{tab}' 无内置默认知识库文件，无法自动重建")
-        return
-
-    rebuilt = 0
-    for filename, content in defaults.items():
-        file_path = 知识库路径 / filename
-        try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
-            rebuilt += 1
-            logger.info(f"自愈重建: {file_path}")
-        except OSError as e:
-            logger.error(f"自愈写入失败 {file_path}: {e}")
-
-    logger.info(f"知识库自愈完成: Tab '{tab}' 重建了 {rebuilt} 个文件")
-
-
-# 分块策略常量
-_CHUNK_SOFT_TARGET = 800    # chunk 软目标字符数（短 section 直接保留）
-_MAX_SECTION_KEEP = 2500     # 完整 section 保留上限（结构化文档保持完整）
-_OVERLAP_SIZE = 100          # 重叠字符数，保证上下文连贯
-
-
-def _提取原子块(text: str) -> list:
-    """将文本拆分为不可分割的原子块：代码围栏、ASCII 图、表格、编号列表、普通段落
-
-    每个原子块是一个完整的语义单元，不会被进一步拆分。
-    """
-    blocks = []
-    pos = 0
-    length = len(text)
-
-    while pos < length:
-        # 跳过空行
-        while pos < length and text[pos] == '\n':
-            pos += 1
-        if pos >= length:
-            break
-
-        remaining = text[pos:]
-
-        # 1. 代码围栏块 ```...```
-        fence_match = re.match(r'(```\w*\n.*?```)', remaining, re.DOTALL)
-        if fence_match:
-            blocks.append(fence_match.group(1))
-            pos += fence_match.end()
-            continue
-
-        # 2. ASCII 图框（┌┐└┘│─ 或连续缩进的箭头图）
-        ascii_match = re.match(r'((?:[┌┐└┘│─╔╗╚╝║═▶←↑↓▼►◄●○◆◇].*\n?)+)', remaining)
-        if ascii_match and len(ascii_match.group(1)) > 20:
-            blocks.append(ascii_match.group(1).rstrip())
-            pos += ascii_match.end()
-            continue
-
-        # 3. Markdown 表格（连续 | 行）
-        table_match = re.match(r'((?:\|.*\|\s*\n?)+)', remaining)
-        if table_match and table_match.group(1).count('\n') >= 2:
-            blocks.append(table_match.group(1).rstrip())
-            pos += table_match.end()
-            continue
-
-        # 4. 编号列表（连续的 1. 2. 3. ... 行）
-        list_match = re.match(r'((?:\d+\.\s+.+\n?)+)', remaining)
-        if list_match and list_match.group(1).count('\n') >= 1:
-            blocks.append(list_match.group(1).rstrip())
-            pos += list_match.end()
-            continue
-
-        # 5. 普通段落（到下一个空行）
-        para_match = re.match(r'([^\n]+(?:\n[^\n]+)*)', remaining)
-        if para_match:
-            blocks.append(para_match.group(1).rstrip())
-            pos += para_match.end()
-        else:
-            pos += 1
-
-    return blocks
-
-
-def _将原子块组装为chunks(原子块: list, heading: str, file_stem: str, relative_path: str) -> list:
-    """将原子块列表按软目标大小组装为 chunks，保证每个原子块不被拆分"""
-    chunks = []
-    current = ""
-    chunk_idx = 0
-
-    for block in 原子块:
-        # 单个原子块已超过软目标 → 先输出当前累积，再独立输出该块
-        if len(block) > _CHUNK_SOFT_TARGET and current.strip():
-            suffix = f"#{chunk_idx}" if chunk_idx > 0 else ""
-            title_suffix = f" ({chunk_idx + 1})" if chunk_idx > 0 else ""
-            chunks.append((
-                f"{relative_path}#{heading}{suffix}",
-                f"{file_stem} - {heading}{title_suffix}",
-                f"[来源: {relative_path}]\n{current.strip()}"
-            ))
-            chunk_idx += 1
-            current = ""
-
-        if len(block) > _CHUNK_SOFT_TARGET and not current.strip():
-            # 超大原子块独立成一个 chunk
-            suffix = f"#{chunk_idx}" if chunk_idx > 0 else ""
-            title_suffix = f" ({chunk_idx + 1})" if chunk_idx > 0 else ""
-            chunks.append((
-                f"{relative_path}#{heading}{suffix}",
-                f"{file_stem} - {heading}{title_suffix}",
-                f"[来源: {relative_path}]\n{block}"
-            ))
-            chunk_idx += 1
-            continue
-
-        # 正常拼接：如果加上当前块仍在软目标内，追加
-        if len(current) + len(block) + 2 <= _CHUNK_SOFT_TARGET:
-            current += (block + "\n\n")
-        else:
-            # 输出当前 chunk，开始新的
-            if current.strip():
-                suffix = f"#{chunk_idx}" if chunk_idx > 0 else ""
-                title_suffix = f" ({chunk_idx + 1})" if chunk_idx > 0 else ""
-                chunks.append((
-                    f"{relative_path}#{heading}{suffix}",
-                    f"{file_stem} - {heading}{title_suffix}",
-                    f"[来源: {relative_path}]\n{current.strip()}"
-                ))
-                chunk_idx += 1
-            current = block + "\n\n"
-
-    if current.strip():
-        suffix = f"#{chunk_idx}" if chunk_idx > 0 else ""
-        title_suffix = f" ({chunk_idx + 1})" if chunk_idx > 0 else ""
-        chunks.append((
-            f"{relative_path}#{heading}{suffix}",
-            f"{file_stem} - {heading}{title_suffix}",
-            f"[来源: {relative_path}]\n{current.strip()}"
-        ))
-
-    return chunks
-
-
-def _split_into_chunks(file_path: Path, content: str):
-    """
-    ComfyUI 文档结构感知的智能分块策略
-
-    设计原则：
-      - ComfyUI 知识库文档按 ## 标题组织，每个 ## section 是自然语义单元
-      - 完整 section（≤2500 字符）保持为一个 chunk，保留代码块、步骤序列等结构的完整性
-      - 超长 section 先按 ### 子节分割，再按原子块（代码围栏/表格/编号列表/段落）组装
-      - 每个 chunk 附带来源标记便于追溯
-
-    Returns:
-        [(chunk_id, chunk_title, chunk_content)] 列表
-    """
-    relative_path = file_path.name
-    chunks = []
-
-    # 1. 按 ## 标题分割
-    sections = re.split(r'(?=^##\s)', content, flags=re.MULTILINE)
-
-    for section in sections:
-        section = section.strip()
-        if not section:
-            continue
-
-        # 提取 section 标题
-        heading_match = re.match(r'^##\s+(.+)', section)
-        heading = heading_match.group(1).strip() if heading_match else file_path.stem
-
-        # 2. 完整 section 保留（≤ 上限）：代码块、步骤序列、表格等结构不被拆分
-        if len(section) <= _MAX_SECTION_KEEP:
-            chunk_id = f"{relative_path}#{heading}"
-            chunk_title = f"{file_path.stem} - {heading}" if heading != file_path.stem else file_path.stem
-            chunk_content = f"[来源: {relative_path}]\n{section}"
-            chunks.append((chunk_id, chunk_title, chunk_content))
-        else:
-            # 3. 超长 section：先按 ### 子节分割
-            sub_sections = re.split(r'(?=^###\s)', section, flags=re.MULTILINE)
-
-            for sub in sub_sections:
-                sub = sub.strip()
-                if not sub:
-                    continue
-
-                # 子节足够短，直接作为一个 chunk
-                if len(sub) <= _MAX_SECTION_KEEP:
-                    sub_heading_match = re.match(r'^###\s+(.+)', sub)
-                    sub_heading = sub_heading_match.group(1).strip() if sub_heading_match else heading
-                    chunk_id = f"{relative_path}#{heading}/{sub_heading}"
-                    chunk_title = f"{file_path.stem} - {sub_heading}"
-                    chunk_content = f"[来源: {relative_path}]\n{sub}"
-                    chunks.append((chunk_id, chunk_title, chunk_content))
-                else:
-                    # 子节仍超长：提取原子块后按软目标组装
-                    原子块 = _提取原子块(sub)
-                    sub_heading_match = re.match(r'^###\s+(.+)', sub)
-                    sub_heading = sub_heading_match.group(1).strip() if sub_heading_match else heading
-                    sub_chunks = _将原子块组装为chunks(原子块, sub_heading, file_path.stem, relative_path)
-                    chunks.extend(sub_chunks)
-
-    return chunks
+# 已确认无 FAQ 文档的 Tab 集合（哨兵：避免每次查询都触发空索引构建）
+_bm25_no_docs: set = set()
+_tfidf_no_docs: set = set()
 
 
 def _generate_index_signature(tab: str) -> str:
-    """基于文件列表的排序路径+大小+mtime生成内容签名"""
-    folder = TAB_FOLDER_MAP.get(tab, tab)
-    kb_path = Path(get_plugin_root()) / "知识库" / folder
+    """基于 FAQ 文件（踩坑记录）的索引内容生成内容签名
+
+    知识库 Markdown 已迁移至云端直检，本地不再存储；
+    签名仅基于影响索引结果的字段（title/problem/solution/tags），
+    排除 access_count/sync_status/updated_at 等可变元数据，
+    避免访问频次写入导致每次重启缓存失效。
+    """
     h = hashlib.sha256()
-    for f in sorted(kb_path.rglob("*.md")):
-        if f.name.lower() == "readme.md":
-            continue
-        h.update(f.name.encode())
-        stat = f.stat()
-        h.update(str(stat.st_size).encode())
-        h.update(str(int(stat.st_mtime)).encode())
-    # FAQ 文件也纳入签名
-    faq_path = Path(get_plugin_root()) / "数据" / "踩坑记录"
-    if faq_path.exists():
-        for f in sorted(faq_path.glob("*.json")):
-            if not f.name.startswith("."):
+    if tab in ("develop", "optimize"):
+        faq_path = Path(get_plugin_root()) / "数据" / "踩坑记录"
+        if faq_path.exists():
+            for f in sorted(faq_path.glob("*.json")):
+                if f.name.endswith(".deleted.json") or f.name.startswith("."):
+                    continue
                 h.update(f.name.encode())
-                h.update(str(int(f.stat().st_mtime)).encode())
+                try:
+                    with open(f, "r", encoding="utf-8") as fp:
+                        data = json.load(fp)
+                    # 仅 hash 影响索引结果的字段，排除可变元数据
+                    h.update((data.get("title", "") or "").encode())
+                    h.update((data.get("problem", "") or "").encode())
+                    h.update((data.get("solution", "") or "").encode())
+                    tags = data.get("tags", []) or []
+                    h.update("\t".join(sorted(tags)).encode())
+                except (OSError, json.JSONDecodeError):
+                    h.update(str(int(f.stat().st_mtime)).encode())
     return h.hexdigest()[:12]
 
 
-def _加载知识库文档(tab: str, 知识库路径: Path) -> list:
+def _加载知识库文档(tab: str) -> list:
     """仅加载本地踩坑记录 FAQ（知识库 Markdown 已迁移至云端直检）
 
     返回 [(doc_id, title, content), ...]，供 BM25 和 TF-IDF 索引共用。
@@ -727,7 +440,8 @@ def _加载知识库文档(tab: str, 知识库路径: Path) -> list:
         faq_dir = Path(get_plugin_root()) / "数据" / "踩坑记录"
         if faq_dir.exists():
             for faq_file in sorted(faq_dir.glob("*.json")):
-                if faq_file.name.endswith(".deleted.json"):
+                # 与 _generate_index_signature 过滤规则保持一致
+                if faq_file.name.endswith(".deleted.json") or faq_file.name.startswith("."):
                     continue
                 try:
                     with open(faq_file, "r", encoding="utf-8") as fp:
@@ -745,7 +459,7 @@ def _加载知识库文档(tab: str, 知识库路径: Path) -> list:
 
                     doc_id = f"faq://{faq_id}"
                     文档列表.append((doc_id, title, doc_content))
-                except (json.JSONDecodeError, OSError, KeyError) as e:
+                except (json.JSONDecodeError, OSError) as e:
                     logger.warning(f"加载 FAQ 文件 {faq_file} 失败: {e}")
 
     return 文档列表
@@ -830,32 +544,46 @@ def _调用云端知识库搜索(query: str, tab: str, top_k: int = 3):
 
 
 def _get_bm25_index(tab: str = "develop") -> "BM25Index":
-    """获取或构建指定 Tab 的 BM25 索引（lazy init）"""
-    global _bm25_instances, _bm25_知识库路径们
+    """获取或构建指定 Tab 的 BM25 索引（lazy init）
 
-    # 将逻辑 tab 标识符（develop/optimize/visualize）映射为中文文件夹名
-    folder_name = TAB_FOLDER_MAP.get(tab, tab)
-    知识库路径 = Path(get_plugin_root()) / "知识库" / folder_name
+    仅索引本地踩坑记录 FAQ（知识库 Markdown 已由云端直检）。
+    FAQ 文件数为 0 时跳过构建，返回 None。
+    """
+    global _bm25_instances
 
-    # 如果已构建且路径未变，直接返回
-    if _bm25_instances.get(tab) is not None and _bm25_知识库路径们.get(tab) == 知识库路径:
+    # 如果已构建，直接返回（失效由 invalidate_bm25_cache / invalidate_faq_index 触发）
+    if _bm25_instances.get(tab) is not None:
         return _bm25_instances[tab]
+    # 已确认无 FAQ 文档，不再重复构建
+    global _bm25_no_docs
+    if tab in _bm25_no_docs:
+        return None
 
     # 构建新索引
     index = BM25Index()
-    _bm25_知识库路径们[tab] = 知识库路径
 
-    # 统一加载知识库文档
-    文档列表 = _加载知识库文档(tab, 知识库路径)
+    # 统一加载知识库文档（仅 FAQ）
+    文档列表 = _加载知识库文档(tab)
+    if not 文档列表:
+        logger.debug(f"[BM25] Tab {tab} 无 FAQ 文档，跳过索引构建")
+        _bm25_no_docs.add(tab)
+        return None
+
     for doc_id, doc_title, doc_content in 文档列表:
         index.add_document(doc_id, doc_title, doc_content)
 
-    # 计算缓存路径：{知识库名}_{内容签名}.pkl，基于文件内容签名精准失效
+    # 计算缓存路径：{知识库名}_{内容签名}.pkl，基于 FAQ 文件内容签名精准失效
     cache_dir = Path(get_plugin_root()) / "数据" / "bm25_cache"
     cache_filename = f"{tab}_{_generate_index_signature(tab)}.pkl"
     cache_path = cache_dir / cache_filename
 
-    index.build_index(cache_path=cache_path)
+    try:
+        index.build_index(cache_path=cache_path)
+        logger.info(f"[BM25] Tab {tab} 索引构建完成，共 {len(文档列表)} 篇 FAQ")
+    except Exception as e:
+        logger.warning(f"[BM25] Tab {tab} 索引构建失败: {e}")
+        _bm25_no_docs.add(tab)
+        return None
 
     # 清理同一 Tab 的旧缓存文件
     try:
@@ -864,7 +592,7 @@ def _get_bm25_index(tab: str = "develop") -> "BM25Index":
                 if old_cache != cache_path:
                     old_cache.unlink(missing_ok=True)
     except OSError as e:
-        logger.debug(f"清理旧缓存文件失败（忽略）: {e}")
+        logger.debug(f"清理旧 BM25 缓存文件失败（忽略）: {e}")
 
     _bm25_instances[tab] = index
     return _bm25_instances[tab]
@@ -873,30 +601,40 @@ def _get_bm25_index(tab: str = "develop") -> "BM25Index":
 def _get_tfidf_index(tab: str = "develop") -> "TFIDF检索器":
     """获取或构建指定 Tab 的 TF-IDF 索引（lazy init）
 
-    与 BM25 索引使用相同的知识库文件和分块策略，
-    但构建 TF-IDF 向量索引用于余弦相似度语义匹配。
+    仅索引本地踩坑记录 FAQ（知识库 Markdown 已由云端直检）。
+    FAQ 文件数为 0 时跳过构建，返回 None。
     """
-    global _tfidf_instances, _tfidf_知识库路径们
+    global _tfidf_instances
 
-    folder_name = TAB_FOLDER_MAP.get(tab, tab)
-    知识库路径 = Path(get_plugin_root()) / "知识库" / folder_name
-
-    # 如果已构建且路径未变，直接返回
-    if _tfidf_instances.get(tab) is not None and _tfidf_知识库路径们.get(tab) == 知识库路径:
+    # 如果已构建，直接返回（失效由 invalidate_bm25_cache / invalidate_faq_index 触发）
+    if _tfidf_instances.get(tab) is not None:
         return _tfidf_instances[tab]
+    # 已确认无 FAQ 文档，不再重复构建
+    global _tfidf_no_docs
+    if tab in _tfidf_no_docs:
+        return None
 
     index = TFIDF检索器()
-    _tfidf_知识库路径们[tab] = 知识库路径
 
-    # 统一加载知识库文档
-    文档列表 = _加载知识库文档(tab, 知识库路径)
+    # 统一加载知识库文档（仅 FAQ）
+    文档列表 = _加载知识库文档(tab)
+    if not 文档列表:
+        logger.debug(f"[TF-IDF] Tab {tab} 无 FAQ 文档，跳过索引构建")
+        _tfidf_no_docs.add(tab)
+        return None
 
-    # 计算缓存路径：{知识库名}_{内容签名}.pkl，基于文件内容签名精准失效
+    # 计算缓存路径：{知识库名}_{内容签名}.pkl，基于 FAQ 文件内容签名精准失效
     cache_dir = Path(get_plugin_root()) / "数据" / "tfidf_cache"
     cache_filename = f"{tab}_{_generate_index_signature(tab)}.pkl"
     cache_path = cache_dir / cache_filename
 
-    index.build_index(文档列表, cache_path=cache_path)
+    try:
+        index.build_index(文档列表, cache_path=cache_path)
+        logger.info(f"[TF-IDF] Tab {tab} 索引构建完成，共 {len(文档列表)} 篇 FAQ")
+    except Exception as e:
+        logger.warning(f"[TF-IDF] Tab {tab} 索引构建失败: {e}")
+        _tfidf_no_docs.add(tab)
+        return None
 
     # 清理同一 Tab 的旧缓存文件
     try:
@@ -916,11 +654,13 @@ def invalidate_bm25_cache():
 
     调用时机：踩坑记录 / 知识库内容发生新增、更新或删除后。
     """
-    global _bm25_instances, _tfidf_instances
+    global _bm25_instances, _tfidf_instances, _bm25_no_docs, _tfidf_no_docs
     for key in _bm25_instances:
         _bm25_instances[key] = None
     for key in _tfidf_instances:
         _tfidf_instances[key] = None
+    _bm25_no_docs.clear()
+    _tfidf_no_docs.clear()
     try:
         _cached_bm25_search.cache_clear()
     except (AttributeError, TypeError) as e:
@@ -938,12 +678,16 @@ def invalidate_faq_index():
     比 invalidate_bm25_cache() 更轻量：不影响 visualize Tab 的纯知识库索引。
     调用时机：踩坑记录新增、更新或删除后。
     """
-    global _bm25_instances, _tfidf_instances
+    global _bm25_instances, _tfidf_instances, _bm25_no_docs, _tfidf_no_docs
     for tab in ("develop", "optimize"):
         if tab in _bm25_instances:
             _bm25_instances[tab] = None
         if tab in _tfidf_instances:
             _tfidf_instances[tab] = None
+    _bm25_no_docs.discard("develop")
+    _bm25_no_docs.discard("optimize")
+    _tfidf_no_docs.discard("develop")
+    _tfidf_no_docs.discard("optimize")
     try:
         _cached_bm25_search.cache_clear()
     except (AttributeError, TypeError):
@@ -961,12 +705,18 @@ def _cached_bm25_search(query: str, tab: str = "develop", top_k: int = 3, min_sc
     带缓存的 BM25 检索（按 Tab 区分缓存 key）
 
     Returns:
-        tuple of (doc_id, title, score, snippet) 元组
+        tuple of (doc_id, title, score, snippet) 元组；BM25 不可用时返回空元组
     """
-    index = _get_bm25_index(tab)
-    results = index.search(query, top_k=top_k, min_score=min_score)
-    # lru_cache 需要返回可哈希类型，转为 tuple
-    return tuple((doc_id, title, score, snippet) for doc_id, title, score, snippet in results)
+    try:
+        index = _get_bm25_index(tab)
+        if index is None:
+            return ()
+        results = index.search(query, top_k=top_k, min_score=min_score)
+        # lru_cache 需要返回可哈希类型，转为 tuple
+        return tuple((doc_id, title, score, snippet) for doc_id, title, score, snippet in results)
+    except Exception as e:
+        logger.warning(f"BM25 检索失败，回退到空结果: {e}")
+        return ()
 
 
 @lru_cache(maxsize=256)
@@ -978,6 +728,8 @@ def _cached_tfidf_search(query: str, tab: str = "develop", top_k: int = 8):
     """
     try:
         index = _get_tfidf_index(tab)
+        if index is None:
+            return ()
         results = index.search(query, top_k=top_k)
         return tuple((doc_id, title, score, snippet) for doc_id, title, score, snippet in results)
     except Exception as e:
@@ -1137,7 +889,6 @@ class ToolRouter:
     """知识库检索与意图路由"""
 
     def __init__(self):
-        self.知识库路径 = Path(get_plugin_root()) / "知识库"
         self.文件工具 = FILE_TOOLS
         # 云端知识库检索失败信号（每次 retrieve_knowledge 调用会重置）
         self.kb_retrieval_failed = False
