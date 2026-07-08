@@ -1,7 +1,0 @@
-{
-    "id": "image-process-node",
-    "name": "基础图像处理节点",
-    "description": "IMAGE 输入输出 + 强度控制 + 可选遮罩，适合图像滤镜、变换、合成",
-    "category": "图像处理",
-    "files": ["__init__.py", "image_node.py", "js/example.js", "README.md"]
-}

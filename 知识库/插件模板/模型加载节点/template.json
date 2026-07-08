@@ -1,7 +1,0 @@
-{
-    "id": "model-loader-node",
-    "name": "模型加载节点",
-    "description": "加载 checkpoint/VAE/LoRA 模型，包含路径校验、设备管理、COMBO 选择器",
-    "category": "模型加载",
-    "files": ["__init__.py", "model_loader.py", "README.md"]
-}
