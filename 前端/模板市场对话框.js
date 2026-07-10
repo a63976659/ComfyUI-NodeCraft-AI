@@ -9,10 +9,14 @@ import { 创建会话 } from "./交互与状态.js";
 
 // 入口类型 → 模板与默认项目名的映射
 const ENTRY_TYPE_MAP = {
-    topMenu: { template_id: "ui_extension", label: "顶部菜单栏", defaultName: "my_menu_extension" },
-    sidebar: { template_id: "ui_extension", label: "侧边栏 Tab", defaultName: "my_sidebar_plugin" },
-    canvas: { template_id: "basic_node", label: "基础节点", defaultName: "my_custom_node" },
-    statusBar: { template_id: "ui_extension", label: "底部状态栏", defaultName: "my_statusbar_plugin" },
+    topMenu: { template_id: "ui_extension", label: "顶部菜单栏", defaultName: "my_menu_extension",
+        customLabel: "菜单显示名称", customPlaceholder: "例如: 我的命令", customKey: "menu_label", customDefault: "我的命令" },
+    sidebar: { template_id: "ui_extension", label: "侧边栏 Tab", defaultName: "my_sidebar_plugin",
+        customLabel: "侧边栏显示名称", customPlaceholder: "例如: 我的侧边栏", customKey: "sidebar_title", customDefault: "我的插件" },
+    canvas: { template_id: "basic_node", label: "基础节点", defaultName: "my_custom_node",
+        customLabel: "节点分类 (CATEGORY)", customPlaceholder: "例如: 🔧 我的工具/图像处理", customKey: "category", customDefault: "🔧 自定义工具/基础处理" },
+    statusBar: { template_id: "ui_extension", label: "底部状态栏", defaultName: "my_statusbar_plugin",
+        customLabel: "状态栏显示名称", customPlaceholder: "例如: 运行中", customKey: "status_label", customDefault: "我的状态" },
 };
 
 /**
@@ -147,6 +151,18 @@ export async function 显示模板市场对话框(rootContainer) {
     nameField.appendChild(nameInput);
     body.appendChild(nameField);
 
+    // === 自定义名称输入（根据入口类型动态显示） ===
+    const customNameField = document.createElement("div");
+    customNameField.className = "nc-sync-field";
+    customNameField.style.display = "none";
+    const customNameLabel = document.createElement("label");
+    customNameField.appendChild(customNameLabel);
+    const customNameInput = document.createElement("input");
+    customNameInput.type = "text";
+    customNameInput.className = "nc-sync-input";
+    customNameField.appendChild(customNameInput);
+    body.appendChild(customNameField);
+
     // === 进度/结果区域 ===
     const progressArea = document.createElement("div");
     progressArea.className = "nc-sync-progress";
@@ -193,6 +209,17 @@ export async function 显示模板市场对话框(rootContainer) {
         if (meta && nameInput.dataset.dirty !== "1") {
             nameInput.value = meta.defaultName;
         }
+
+        // 显示/填充自定义名称输入框
+        if (meta && meta.customKey) {
+            customNameLabel.textContent = meta.customLabel;
+            customNameInput.placeholder = meta.customPlaceholder;
+            customNameInput.value = meta.customDefault;
+            customNameField.style.display = "";
+        } else {
+            customNameField.style.display = "none";
+        }
+
         confirmBtn.disabled = false;
     }
 
@@ -222,6 +249,15 @@ export async function 显示模板市场对话框(rootContainer) {
             options.querySelectorAll('input[type="checkbox"]:checked')
         ).map(cb => cb.dataset.option);
 
+        // 收集自定义名称
+        const customNames = {};
+        if (meta && meta.customKey) {
+            const customValue = customNameInput.value.trim();
+            if (customValue) {
+                customNames[meta.customKey] = customValue;
+            }
+        }
+
         confirmBtn.disabled = true;
         cancelBtn.disabled = true;
         confirmBtn.textContent = "创建中...";
@@ -238,6 +274,7 @@ export async function 显示模板市场对话框(rootContainer) {
                     project_name: projectName,
                     entry_type: selectedEntry,
                     options: selectedOptions,
+                    custom_names: customNames,
                 })
             });
             const data = await resp.json();
