@@ -21,6 +21,7 @@ from 后端.文件读写操作 import (
     apply_patch as _apply_patch,
     _备份文件 as _备份文件,
     search_plugin_file as _search_plugin_file,
+    update_readme_changelog as _update_readme_changelog,
 )
 from 后端.日志配置 import 获取日志器
 from 智能体.向量检索器 import TFIDF检索器
@@ -108,6 +109,24 @@ FILE_TOOLS = [
         "parameters": {
             "type": "object",
             "properties": {}
+        }
+    },
+    {
+        "name": "update_readme",
+        "description": (
+            "在插件的 README.md 的“更新介绍”模块追加一条更新记录。"
+            "每次任务完成后必须调用此工具，记录本次做了什么。"
+            "更新说明必须是一句简洁易懂的大白话，禁止使用专业术语。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "changelog_entry": {
+                    "type": "string",
+                    "description": "一条简洁的更新说明，例如：'新增了图片风格转换功能'、'修复了文字处理乱码的问题'"
+                }
+            },
+            "required": ["changelog_entry"]
         }
     },
     {
@@ -1179,9 +1198,9 @@ async def 执行工具(tool_name: str, tool_args: dict, plugin_path: str) -> str
 
     tool_args = tool_args or {}
 
-    # 写操作加锁保护（write_plugin_file 和 edit_file 均为写操作）
-    if tool_name in ("write_plugin_file", "edit_file"):
-        file_path = tool_args.get("file_path", "")
+    # 写操作加锁保护（write_plugin_file、edit_file、update_readme 均为写操作）
+    if tool_name in ("write_plugin_file", "edit_file", "update_readme"):
+        file_path = tool_args.get("file_path", "") if tool_name != "update_readme" else "README.md"
         lock = _获取文件写锁(file_path)
         async with lock:
             result = await _执行工具内部(tool_name, tool_args, plugin_path)
@@ -1272,6 +1291,13 @@ async def _执行工具内部(tool_name: str, tool_args: dict, plugin_path: str)
             if success:
                 return _截断工具结果(f"🔍 {result}")
             return f"❌ 搜索失败：{result}"
+
+        if tool_name == "update_readme":
+            changelog_entry = tool_args.get("changelog_entry")
+            if not changelog_entry:
+                return "❌ 错误：缺少必需参数 changelog_entry，请提供更新说明"
+            result = _update_readme_changelog(plugin_path, changelog_entry)
+            return ("✅ " if result["success"] else "❌ ") + result["message"]
 
         if tool_name == "batch_edit":
             operations = tool_args.get("operations", [])

@@ -203,7 +203,7 @@ def extract_tool_calls(text: str) -> list[dict]:
 
 
 # 已知工具名列表（用于从参数推断工具名）
-_KNOWN_TOOLS = {'list_plugin_files', 'read_plugin_file', 'write_plugin_file'}
+_KNOWN_TOOLS = {'list_plugin_files', 'read_plugin_file', 'write_plugin_file', 'update_readme'}
 
 
 def _推断工具名(arguments: dict) -> str | None:
@@ -219,6 +219,8 @@ def _推断工具名(arguments: dict) -> str | None:
     keys = set(arguments.keys())
     if 'content' in keys:
         return 'write_plugin_file'
+    if 'changelog_entry' in keys:
+        return 'update_readme'
     if 'file_path' in keys:
         return 'read_plugin_file'
     return None
