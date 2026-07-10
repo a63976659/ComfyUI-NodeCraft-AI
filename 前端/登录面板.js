@@ -160,6 +160,34 @@ export function 登出() {
     _ncaState.balanceAt  = 0;
 }
 
+// ─── 登录响应处理公共逻辑 ──────────────────────────
+/**
+ * 处理 verify-login 成功响应，统一设置 _ncaState
+ * @returns {boolean} 是否需要刷新会员信息
+ */
+function _处理登录响应(data, token, user) {
+    _ncaState.token      = token;
+    _ncaState.user       = data.user || user || { name: "RanKing 用户" };
+    _ncaState.account    = data.account || (user && user.account) || "";
+    _ncaState.verifiedAt = Date.now();
+
+    // 登录成功后直接使用后端返回的 nca_balance（云端数据源）
+    if (data.nca_balance !== undefined) {
+        _ncaState.balance = { amount: data.nca_balance, currency: "token", tokens_per_credit: 200000 };
+        _ncaState.balanceAt = Date.now();
+    }
+    // 保存会员信息（tier_info），无则视为免费用户
+    _ncaState.tier_info = data.tier_info || null;
+
+    // 云端同步失败且本地无缓存 → 提示用户（新设备首次登录常见）
+    if (data.sync_warning === "cloud_unreachable") {
+        Toast.warning("云端数据暂未同步，会员和余额信息可能不准确，稍后自动刷新");
+    }
+
+    // 需要异步刷新会员信息的情况
+    return !data.tier_info;
+}
+
 // ─── 自动登录（从 RanKing 存储引导凭证并验证）────────────────
 // 返回 true 表示已登录或自动登录成功；false 表示需要手动登录
 export async function 自动登录() {
@@ -177,20 +205,9 @@ export async function 自动登录() {
     });
 
     if (r.ok && r.data && (r.data.valid === true || r.data.success === true || r.data.ok === true)) {
-        _ncaState.token      = token;
-        _ncaState.user       = r.data.user || user || { name: "RanKing 用户" };
-        // 保存 RanKing 返回的 account（用户唯一标识），供充值等接口使用
-        _ncaState.account    = r.data.account || (user && user.account) || "";
-        _ncaState.verifiedAt = Date.now();
-        // 登录成功后直接使用后端返回的 nca_balance（云端数据源）
-        if (r.data.nca_balance !== undefined) {
-            _ncaState.balance = { amount: r.data.nca_balance, currency: "token", tokens_per_credit: 200000 };
-            _ncaState.balanceAt = Date.now();
-        }
-        // 保存会员信息（tier_info），无则视为免费用户
-        _ncaState.tier_info = r.data.tier_info || null;
+        const 需刷新 = _处理登录响应(r.data, token, user);
         // 异步补偿：若登录时云端超时未取到会员信息，3秒后重试
-        if (!_ncaState.tier_info) {
+        if (需刷新) {
             setTimeout(() => _刷新会员信息(), 3000);
         }
         return true;
@@ -334,19 +351,12 @@ function _渲染登录提示(host, onEnter) {
         });
 
         if (r.ok && r.data && (r.data.valid === true || r.data.success === true || r.data.ok === true)) {
-            _ncaState.token      = token;
-            _ncaState.user       = r.data.user || user || { name: "RanKing 用户" };
-            // 保存 RanKing 返回的 account（用户唯一标识），供充值等接口使用
-            _ncaState.account    = r.data.account || (user && user.account) || "";
-            _ncaState.verifiedAt = Date.now();
-            // 登录成功后直接使用后端返回的 nca_balance（云端数据源）
-            if (r.data.nca_balance !== undefined) {
-                _ncaState.balance = { amount: r.data.nca_balance, currency: "token", tokens_per_credit: 200000 };
-                _ncaState.balanceAt = Date.now();
-            }
-            // 保存会员信息（tier_info），无则视为免费用户
-            _ncaState.tier_info = r.data.tier_info || null;
+            const 需刷新 = _处理登录响应(r.data, token, user);
             Toast.success("登录成功，欢迎回来");
+            // 异步补偿：若登录时云端超时未取到会员信息，3秒后重试
+            if (需刷新) {
+                setTimeout(() => _刷新会员信息(), 3000);
+            }
             创建登录面板(host, { onEnter: onEnter });
             return;
         }
