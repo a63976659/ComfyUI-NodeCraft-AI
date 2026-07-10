@@ -189,11 +189,51 @@ export async function 自动登录() {
         }
         // 保存会员信息（tier_info），无则视为免费用户
         _ncaState.tier_info = r.data.tier_info || null;
+        // 异步补偿：若登录时云端超时未取到会员信息，3秒后重试
+        if (!_ncaState.tier_info) {
+            setTimeout(() => _刷新会员信息(), 3000);
+        }
         return true;
     }
 
     return false;
 }
+
+// ─── 异步会员信息刷新（独立于登录流程）────────────────
+let _会员刷新中 = false;
+/**
+ * 异步刷新会员信息（独立于登录流程，可在任意时刻调用）
+ * 不阻塞主 UI，失败时静默降级
+ */
+async function _刷新会员信息() {
+    if (!_ncaState.token || _会员刷新中) return;
+    _会员刷新中 = true;
+    try {
+        const r = await _本地调用("/nca/billing/membership-info", {
+            method: "GET",
+            token: _ncaState.token,
+        });
+        if (r.ok && r.data && r.data.tier_info) {
+            _ncaState.tier_info = r.data.tier_info;
+            // 通知其他面板更新会员状态显示
+            事件总线.emit("nca:membership-updated", r.data.tier_info);
+        }
+    } catch (e) {
+        // 静默失败，不影响主流程
+    } finally {
+        _会员刷新中 = false;
+    }
+}
+
+// 会员信息异步更新后刷新 UI
+事件总线.on("nca:membership-updated", (tierInfo) => {
+    // 更新已渲染的会员状态卡片（如果存在）
+    const card = document.querySelector(".nc-membership-card-current");
+    if (card && card.parentNode) {
+        // 标记需要重新渲染，下次打开 Profile 时自动刷新
+        card.dataset.stale = "true";
+    }
+});
 
 // ─── UI 主入口 ────────────────────────────────────
 export function 创建登录面板(container, opts) {
@@ -206,6 +246,10 @@ export function 创建登录面板(container, opts) {
     _currentOnEnter = onEnter;
 
     if (_ncaState.token && _ncaState.user) {
+        // 已登录但无会员信息时异步刷新
+        if (!_ncaState.tier_info) {
+            _刷新会员信息();
+        }
         const profile = _渲染Profile(container, onEnter);
         container.appendChild(profile);
         // 异步刷新余额（不阻塞渲染）
