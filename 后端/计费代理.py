@@ -443,10 +443,6 @@ async def 验证登录(request: web.Request) -> web.Response:
             if account:
                 try:
                     cloud_info = await _云端同步用户信息(account)
-                    if cloud_info is None:
-                        # ModelScope Space 冷启动可能导致首次超时，重试一次
-                        await asyncio.sleep(2)
-                        cloud_info = await _云端同步用户信息(account)
                     if cloud_info is not None:
                         nca_balance = cloud_info.get("nca_balance", 0)
                         tier_info = cloud_info.get("tier_info")
