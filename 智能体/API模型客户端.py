@@ -191,6 +191,15 @@ class AICoderClient:
             headers["Authorization"] = f"Bearer {modelscope_sdk_token}"
         return headers
 
+    def _refresh_headers(self) -> dict:
+        """重新从设置文件读取最新 token 并构建认证 headers。
+
+        用于工具调用循环中每轮刷新 token，防止长时间循环中 token 过期。
+        与 _build_cloud_headers 的区别：本方法主动调用 load_settings() 读取最新设置。
+        """
+        fresh_settings = load_settings()
+        return self._build_cloud_headers(fresh_settings)
+
     def _supports_vision(self) -> bool:
         """检测当前 API 模型是否支持视觉/多模态输入"""
         model_name = (self.当前模型名 or "").lower()
@@ -373,6 +382,13 @@ class AICoderClient:
         _工具重试计数 = {}  # tool_call_id -> 重试次数
 
         for 工具轮次 in range(最大工具循环次数):
+            # ── 每轮刷新认证 headers（防止长时间工具循环中 token 过期）──
+            # ranking_token 有效期约 15 分钟，多轮工具调用可能超过此时间，
+            # 因此每轮重新从设置文件读取最新 token 构建 headers
+            if 工具轮次 > 0:
+                headers = self._refresh_headers()
+                logger.debug(f"[Token刷新] 第{工具轮次+1}轮工具调用，已刷新认证 headers")
+
             # 动态窗口控制
             _estimated = self._estimate_tokens(complete_messages)
             _limit = self._get_model_context_limit(model_name)
@@ -401,8 +417,22 @@ class AICoderClient:
                 try:
                     async with 会话.post(url, json=payload, headers=headers,
                                         timeout=aiohttp.ClientTimeout(total=120)) as resp:
-                        # --- P0: 致命错误分类（不重试）---
+                        # --- P0: 致命错误分类 ---
                         if resp.status in self._致命错误码:
+                            # 403 特殊处理：尝试刷新 token 后重试一次（流式工具循环中 token 可能过期）
+                            if resp.status == 403 and retry < 1:
+                                error_body = ""
+                                try:
+                                    error_body = await resp.text()
+                                except Exception:
+                                    pass
+                                logger.warning(
+                                    f"[403] 第{工具轮次+1}轮返回403，尝试刷新token重试: "
+                                    f"body={error_body[:200]}"
+                                )
+                                headers = self._refresh_headers()
+                                await asyncio.sleep(1.5)
+                                continue
                             self._性能.记录请求(time.time() - 开始时间, False)
                             return self._致命错误码[resp.status]
 
@@ -796,6 +826,11 @@ class AICoderClient:
         _只读续跑次数 = 0      # 首轮只读不写时的续跑
 
         for 工具轮次 in range(最大工具循环次数):
+            # ── 每轮刷新认证 headers（防止长时间工具循环中 token 过期）──
+            if 工具轮次 > 0:
+                headers = self._refresh_headers()
+                logger.debug(f"[流式Token刷新] 第{工具轮次+1}轮工具调用，已刷新认证 headers")
+
             # 动态窗口控制
             _estimated = self._estimate_tokens(prepared_messages)
             _limit = self._get_model_context_limit(model_name)
@@ -842,8 +877,47 @@ class AICoderClient:
                                     )) as resp:
                     # 致命错误检查
                     if resp.status in self._致命错误码:
-                        yield self._致命错误码[resp.status]
-                        return
+                        # 403 特殊处理：尝试刷新 token 后重试一次（流式工具循环中 token 可能过期）
+                        if resp.status == 403:
+                            error_body = ""
+                            try:
+                                error_body = await resp.text()
+                            except Exception:
+                                pass
+                            logger.warning(
+                                f"[流式403] 第{工具轮次+1}轮返回403，尝试刷新token重试: "
+                                f"body={error_body[:200]}"
+                            )
+                            headers = self._refresh_headers()
+                            await asyncio.sleep(1.5)
+                            # 重试一次
+                            try:
+                                async with 会话.post(url, json=payload, headers=headers,
+                                                    timeout=aiohttp.ClientTimeout(
+                                                        total=_total_timeout,
+                                                        sock_connect=_connect_timeout,
+                                                    )) as retry_resp:
+                                    if retry_resp.status == 200:
+                                        resp = retry_resp  # 替换为成功的响应，继续下面流程
+                                    else:
+                                        if retry_resp.status in self._致命错误码:
+                                            yield self._致命错误码[retry_resp.status]
+                                        else:
+                                            retry_text = ""
+                                            try:
+                                                retry_text = await retry_resp.text()
+                                            except Exception:
+                                                pass
+                                            yield f"[API 错误 {retry_resp.status}]: {retry_text[:300]}"
+                                        return
+                            except Exception as e:
+                                logger.warning(f"[流式403重试] 请求失败: {e}")
+                                yield f"[连接错误]: 403重试失败 - {e}"
+                                return
+                            # 重试成功，跳过 yield，继续处理响应
+                        else:
+                            yield self._致命错误码[resp.status]
+                            return
 
                     if resp.status != 200:
                         # API 不支持 tools 参数 → 降级重试
