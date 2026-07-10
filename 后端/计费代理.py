@@ -252,8 +252,11 @@ async def _云端同步余额(account: str) -> Optional[int]:
     return None
 
 
-async def _云端同步用户信息(account: str) -> Optional[dict]:
+async def _云端同步用户信息(account: str, *, 重试次数: int = 1) -> Optional[dict]:
     """调用云端 sync-balance 获取 NCA token 余额和会员信息
+
+    ModelScope 推理端点冷启动可能耗时 30-60 秒，因此超时放宽到 60 秒，
+    并支持一次性重试（首次请求触发冷启动，第二次可能命中暖实例）。
 
     返回 dict: {"nca_balance": int, "tier_info": {...} | None}；云端不可达时返回 None。
     """
@@ -264,22 +267,54 @@ async def _云端同步用户信息(account: str) -> Optional[dict]:
     if sdk_token:
         headers["Authorization"] = f"Bearer {sdk_token}"
     body = {"plugin_key": NCA_PLUGIN_KEY, "user_id": account}
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.post(url, json=body, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if isinstance(data, dict) and data.get("status") == "success":
-                        balance = data.get("nca_balance", 0)
-                        tier_info = data.get("tier_info")  # 会员信息（可能为 None）
-                        logger.info(f"云端同步用户信息成功: account={str(account)[:20]}, balance={balance}")
-                        return {"nca_balance": int(balance), "tier_info": tier_info}
-    except asyncio.TimeoutError:
-        logger.warning(f"云端同步余额超时: account={str(account)[:20]}")
-    except aiohttp.ClientError as e:
-        logger.warning(f"云端同步余额失败(网络): account={str(account)[:20]}, error={e}")
-    except Exception as e:
-        logger.warning(f"云端同步余额异常: account={str(account)[:20]}, error={e}")
+
+    async def _单次请求() -> Optional[dict]:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.post(url, json=body, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if isinstance(data, dict) and data.get("status") == "success":
+                            balance = data.get("nca_balance", 0)
+                            tier_info = data.get("tier_info")  # 会员信息（可能为 None）
+                            logger.info(f"云端同步用户信息成功: account={str(account)[:20]}, balance={balance}")
+                            return {"nca_balance": int(balance), "tier_info": tier_info}
+                        else:
+                            logger.warning(
+                                f"云端同步返回非成功状态: account={str(account)[:20]}, "
+                                f"status={data.get('status')}, body_keys={list(data.keys())[:10]}"
+                            )
+                    else:
+                        resp_text = ""
+                        try:
+                            resp_text = await resp.text()
+                        except Exception:
+                            pass
+                        logger.warning(
+                            f"云端同步HTTP错误: account={str(account)[:20]}, "
+                            f"status={resp.status}, body={resp_text[:200]}"
+                        )
+        except asyncio.TimeoutError:
+            logger.warning(f"云端同步余额超时(60s): account={str(account)[:20]}, url={url[:60]}")
+        except aiohttp.ClientError as e:
+            logger.warning(f"云端同步余额失败(网络): account={str(account)[:20]}, error={e}")
+        except Exception as e:
+            logger.warning(f"云端同步余额异常: account={str(account)[:20]}, error={e}")
+        return None
+
+    # 首次请求
+    result = await _单次请求()
+    if result is not None:
+        return result
+
+    # 重试（冷启动场景：第一次请求触发端点唤醒，第二次命中暖实例）
+    for i in range(重试次数):
+        logger.info(f"云端同步重试 {i+1}/{重试次数}: account={str(account)[:20]}")
+        await asyncio.sleep(3)  # 等待端点可能已被唤醒
+        result = await _单次请求()
+        if result is not None:
+            return result
+
     return None
 
 
@@ -440,12 +475,14 @@ async def 验证登录(request: web.Request) -> web.Response:
             # 登录成功后同步 NCA 余额与会员信息（云端优先，降级本地缓存）
             nca_balance = 0
             tier_info = None
+            cloud_synced = False  # 标记是否从云端成功同步
             if account:
                 try:
-                    cloud_info = await _云端同步用户信息(account)
+                    cloud_info = await _云端同步用户信息(account, 重试次数=2)
                     if cloud_info is not None:
                         nca_balance = cloud_info.get("nca_balance", 0)
                         tier_info = cloud_info.get("tier_info")
+                        cloud_synced = True
                         保存NCA余额(account, nca_balance)
                         # 缓存会员信息到本地
                         if tier_info:
@@ -463,8 +500,12 @@ async def 验证登录(request: web.Request) -> web.Response:
                 try:
                     resp_data = _json.loads(response.body)
                     resp_data["nca_balance"] = nca_balance
+                    resp_data["cloud_synced"] = cloud_synced
                     if tier_info:
                         resp_data["tier_info"] = tier_info
+                    # 云端同步失败且本地无缓存时，添加标记通知前端
+                    if not cloud_synced and not tier_info:
+                        resp_data["sync_warning"] = "cloud_unreachable"
                     response = web.json_response(resp_data, status=response.status)
                 except Exception as e:
                     logger.warning(f"注入 nca_balance/tier_info 到响应失败: {e}")
