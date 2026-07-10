@@ -419,20 +419,26 @@ class AICoderClient:
                                         timeout=aiohttp.ClientTimeout(total=120)) as resp:
                         # --- P0: 致命错误分类 ---
                         if resp.status in self._致命错误码:
-                            # 403 特殊处理：尝试刷新 token 后重试一次（流式工具循环中 token 可能过期）
-                            if resp.status == 403 and retry < 1:
-                                error_body = ""
+                            # 403 特殊处理：解析服务端实际错误信息（如会员过期、账号封禁等）
+                            if resp.status == 403:
+                                server_msg = self._致命错误码[resp.status]
                                 try:
-                                    error_body = await resp.text()
+                                    body_text = await resp.text()
+                                    detail = json.loads(body_text).get("detail", "")
+                                    if detail:
+                                        server_msg = detail
+                                    logger.warning(
+                                        f"[403] 第{工具轮次+1}轮返回403: {server_msg[:300]}"
+                                    )
                                 except Exception:
-                                    pass
-                                logger.warning(
-                                    f"[403] 第{工具轮次+1}轮返回403，尝试刷新token重试: "
-                                    f"body={error_body[:200]}"
-                                )
-                                headers = self._refresh_headers()
-                                await asyncio.sleep(1.5)
-                                continue
+                                    logger.warning(f"[403] 第{工具轮次+1}轮返回403（无法读取详情）")
+                                # 刷新 token 后重试一次（仅在 token 过期导致 verify_ranking_token 失败时有效）
+                                if retry < 1:
+                                    headers = self._refresh_headers()
+                                    await asyncio.sleep(1.5)
+                                    continue
+                                self._性能.记录请求(time.time() - 开始时间, False)
+                                return server_msg
                             self._性能.记录请求(time.time() - 开始时间, False)
                             return self._致命错误码[resp.status]
 
@@ -877,20 +883,22 @@ class AICoderClient:
                                     )) as resp:
                     # 致命错误检查
                     if resp.status in self._致命错误码:
-                        # 403 特殊处理：尝试刷新 token 后重试一次（流式工具循环中 token 可能过期）
+                        # 403 特殊处理：解析服务端实际错误信息，必要时刷新 token 重试
                         if resp.status == 403:
-                            error_body = ""
+                            server_msg = self._致命错误码[resp.status]
                             try:
-                                error_body = await resp.text()
+                                body_text = await resp.text()
+                                detail = json.loads(body_text).get("detail", "")
+                                if detail:
+                                    server_msg = detail
+                                logger.warning(
+                                    f"[流式403] 第{工具轮次+1}轮返回403: {server_msg[:300]}"
+                                )
                             except Exception:
-                                pass
-                            logger.warning(
-                                f"[流式403] 第{工具轮次+1}轮返回403，尝试刷新token重试: "
-                                f"body={error_body[:200]}"
-                            )
+                                logger.warning(f"[流式403] 第{工具轮次+1}轮返回403（无法读取详情）")
+                            # 刷新 token 后重试一次
                             headers = self._refresh_headers()
                             await asyncio.sleep(1.5)
-                            # 重试一次
                             try:
                                 async with 会话.post(url, json=payload, headers=headers,
                                                     timeout=aiohttp.ClientTimeout(
@@ -901,7 +909,17 @@ class AICoderClient:
                                         resp = retry_resp  # 替换为成功的响应，继续下面流程
                                     else:
                                         if retry_resp.status in self._致命错误码:
-                                            yield self._致命错误码[retry_resp.status]
+                                            # 尝试读取重试失败详情
+                                            retry_msg = self._致命错误码[retry_resp.status]
+                                            if retry_resp.status == 403:
+                                                try:
+                                                    retry_body = await retry_resp.text()
+                                                    retry_detail = json.loads(retry_body).get("detail", "")
+                                                    if retry_detail:
+                                                        retry_msg = retry_detail
+                                                except Exception:
+                                                    pass
+                                            yield retry_msg
                                         else:
                                             retry_text = ""
                                             try:
