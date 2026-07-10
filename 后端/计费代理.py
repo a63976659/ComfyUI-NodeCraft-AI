@@ -443,6 +443,10 @@ async def 验证登录(request: web.Request) -> web.Response:
             if account:
                 try:
                     cloud_info = await _云端同步用户信息(account)
+                    if cloud_info is None:
+                        # ModelScope Space 冷启动可能导致首次超时，重试一次
+                        await asyncio.sleep(2)
+                        cloud_info = await _云端同步用户信息(account)
                     if cloud_info is not None:
                         nca_balance = cloud_info.get("nca_balance", 0)
                         tier_info = cloud_info.get("tier_info")
@@ -850,6 +854,45 @@ def _读取会员缓存(account: str) -> Optional[dict]:
     return None
 
 
+async def 查询会员信息(request: web.Request) -> web.Response:
+    """GET /nca/billing/membership-info
+    查询当前用户会员信息，优先本地缓存，无缓存则调云端同步。
+    """
+    from .token计费 import 获取token对应账户, 保存NCA余额
+    try:
+        auth = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").replace("bearer ", "").strip()
+        if not token:
+            from .文件读写操作 import load_settings
+            token = load_settings().get("ranking_token", "")
+        if not token:
+            return web.json_response({"tier_info": None, "source": "no_token"})
+
+        account = 获取token对应账户(token)
+        if not account:
+            return web.json_response({"tier_info": None, "source": "no_account"})
+
+        # 优先读本地缓存
+        cached = _读取会员缓存(account)
+        if cached:
+            return web.json_response({"tier_info": cached, "source": "local"})
+
+        # 本地无有效缓存，调云端同步
+        cloud_info = await _云端同步用户信息(account)
+        if cloud_info:
+            tier_info = cloud_info.get("tier_info")
+            nca_balance = cloud_info.get("nca_balance", 0)
+            保存NCA余额(account, nca_balance)
+            if tier_info:
+                _保存会员缓存(account, tier_info)
+            return web.json_response({"tier_info": tier_info, "source": "cloud"})
+
+        return web.json_response({"tier_info": None, "source": "unreachable"})
+    except Exception as e:
+        logger.warning(f"查询会员信息异常: {e}")
+        return web.json_response({"tier_info": None, "source": "error"})
+
+
 async def 检查API权限(request: web.Request) -> Optional[dict]:
     """检查当前用户是否有使用 API 模型的会员权限。
 
@@ -1240,4 +1283,5 @@ def register_计费代理路由(routes) -> None:
     routes.post("/nca/billing/membership-purchase")(购买会员)
     routes.get("/nca/billing/usage")(查询用量)
     routes.get("/nca/billing/token-balance")(查询token余额)
+    routes.get("/nca/billing/membership-info")(查询会员信息)
 
