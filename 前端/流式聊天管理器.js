@@ -18,22 +18,33 @@ import { Toast } from "./工具函数.js";
  * @param {HTMLElement} options.消息容器 - AI 回复气泡元素（用于追加工具指示器等）
  * @param {HTMLElement} options.消息体   - 消息内容渲染容器（innerHTML 会被实时更新）
  * @param {HTMLElement} options.滚动容器 - 滚动目标元素（每次更新后自动滚动到底部）
+ * @param {Function}    [options.获取消息容器] - 动态获取当前消息容器 DOM（用于界面重建后恢复）
+ * @param {Function}    [options.获取消息体]   - 动态获取当前消息体 DOM（用于界面重建后恢复）
+ * @param {Function}    [options.获取滚动容器] - 动态获取当前滚动容器 DOM（用于界面重建后恢复）
  * @param {Object}      options.请求体   - POST 请求 body（直接 JSON 序列化）
  * @param {Function}    [options.数据处理] - 自定义原始事件处理 (data, 状态) => 'skip'|undefined
  *   返回 'skip' 表示已处理该事件、跳过默认内容累加；状态.el 可用于跨 chunk 保持 DOM 引用
  * @param {Function}    [options.完成回调] - 流式结束后调用 ({ fullContent, hasError, isAbort, 连接中断 }) => void
  *   若提供则由调用方自行渲染；若不提供则使用默认 Markdown 渲染
+ * @param {Function}    [options.内容更新回调] - 每次内容更新后调用 (fullContent) => void，供外部追踪累积内容
  * @param {AbortSignal} [options.中止信号] - AbortController signal
  * @returns {Promise<{fullContent: string, hasError: boolean, isAbort: boolean, 连接中断: boolean}>}
  */
 export async function 创建流式聊天(options) {
     const {
         消息容器, 消息体, 滚动容器,
+        获取消息容器, 获取消息体, 获取滚动容器,
         请求体,
         数据处理 = null,
         完成回调 = null,
+        内容更新回调 = null,
         中止信号 = null,
     } = options;
+
+    // 辅助：获取当前有效的 DOM 引用（优先使用 getter，回退到初始引用）
+    const _当前消息体 = () => (获取消息体 ? 获取消息体() : 消息体);
+    const _当前消息容器 = () => (获取消息容器 ? 获取消息容器() : 消息容器);
+    const _当前滚动容器 = () => (获取滚动容器 ? 获取滚动容器() : 滚动容器);
 
     let fullContent = '';
     let buffer = '';
@@ -50,9 +61,10 @@ export async function 创建流式聊天(options) {
 
     // ── 辅助：滚动到底部 ──
     const 滚动 = () => {
-        if (滚动容器) {
+        const container = _当前滚动容器();
+        if (container) {
             requestAnimationFrame(() => {
-                滚动容器.scrollTop = 滚动容器.scrollHeight;
+                container.scrollTop = container.scrollHeight;
             });
         }
     };
@@ -149,7 +161,9 @@ export async function 创建流式聊天(options) {
 
                         if (data.content) {
                             fullContent += data.content;
-                            消息体.innerHTML = 简易Markdown渲染(fullContent) + '<span class="nca-streaming-cursor"></span>';
+                            const body = _当前消息体();
+                            if (body) body.innerHTML = 简易Markdown渲染(fullContent) + '<span class="nca-streaming-cursor"></span>';
+                            if (内容更新回调) 内容更新回调(fullContent);
                             滚动();
                         }
                     } catch (parseErr) {
@@ -194,7 +208,8 @@ export async function 创建流式聊天(options) {
                 buffer = '';
                 hasError = false;
                 状态.el = null;
-                消息体.innerHTML = '<span class="nca-streaming-cursor"></span>';
+                const retryBody = _当前消息体();
+                if (retryBody) retryBody.innerHTML = '<span class="nca-streaming-cursor"></span>';
                 continue SSE重试;
             }
 
@@ -221,17 +236,20 @@ export async function 创建流式聊天(options) {
         完成回调(结果);
     } else {
         // 默认渲染
-        消息体.innerHTML = 简易Markdown渲染(结果.fullContent);
+        const doneBody = _当前消息体();
+        if (doneBody) doneBody.innerHTML = 简易Markdown渲染(结果.fullContent);
+        const doneContainer = _当前消息容器();
         // DOMPurify 未就绪时标记并缓存原始内容，待加载完成后重新渲染
-        if (!window.DOMPurify && 消息容器) {
-            消息体.dataset.pendingSanitize = "true";
-            消息容器._pendingContent = 结果.fullContent;
+        if (!window.DOMPurify && doneBody && doneContainer) {
+            doneBody.dataset.pendingSanitize = "true";
+            doneContainer._pendingContent = 结果.fullContent;
         }
-        if (消息容器) 绑定代码块复制按钮(消息容器);
+        if (doneContainer) 绑定代码块复制按钮(doneContainer);
     }
 
-    // 连接中断且有部分内容：添加“重试”按钮（全量重试，保留已有内容）
-    if (连接中断 && fullContent && !isAbort && 消息容器) {
+    // 连接中断且有部分内容：添加"重试"按钮（全量重试，保留已有内容）
+    const retryContainer = _当前消息容器();
+    if (连接中断 && fullContent && !isAbort && retryContainer) {
         const 重试按钮 = document.createElement('button');
         重试按钮.className = 'nca-retry-btn';
         重试按钮.textContent = '重试';
@@ -245,7 +263,9 @@ export async function 创建流式聊天(options) {
             重试按钮.style.color = 'var(--nca-accent,#5b9fff)';
         });
         重试按钮.addEventListener('click', async () => {
-            const 备份HTML = 消息体.innerHTML;
+            const body = _当前消息体();
+            const container = _当前消息容器();
+            const 备份HTML = body ? body.innerHTML : '';
             重试按钮.remove();
             try {
                 const 重试结果 = await 创建流式聊天(options);
@@ -253,24 +273,28 @@ export async function 创建流式聊天(options) {
                     && 重试结果.fullContent && 重试结果.fullContent !== '（无回复）';
                 if (!成功) {
                     // 重试失败：恢复原内容并重新添加重试按钮
-                    消息体.innerHTML = 备份HTML;
-                    if (消息容器) 绑定代码块复制按钮(消息容器);
-                    消息容器.querySelectorAll('.nca-retry-btn').forEach(b => b.remove());
+                    if (body) body.innerHTML = 备份HTML;
+                    if (container) {
+                        绑定代码块复制按钮(container);
+                        container.querySelectorAll('.nca-retry-btn').forEach(b => b.remove());
+                    }
                     重试按钮.disabled = false;
                     重试按钮.textContent = '重试';
-                    消息容器.appendChild(重试按钮);
+                    if (container) container.appendChild(重试按钮);
                 }
                 // 重试成功：内容已由创建流式聊天渲染，无需额外处理
             } catch (e) {
-                消息体.innerHTML = 备份HTML;
-                if (消息容器) 绑定代码块复制按钮(消息容器);
-                消息容器.querySelectorAll('.nca-retry-btn').forEach(b => b.remove());
+                if (body) body.innerHTML = 备份HTML;
+                if (container) {
+                    绑定代码块复制按钮(container);
+                    container.querySelectorAll('.nca-retry-btn').forEach(b => b.remove());
+                }
                 重试按钮.disabled = false;
                 重试按钮.textContent = '重试';
-                消息容器.appendChild(重试按钮);
+                if (container) container.appendChild(重试按钮);
             }
         });
-        消息容器.appendChild(重试按钮);
+        retryContainer.appendChild(重试按钮);
     }
 
     滚动();

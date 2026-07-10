@@ -20,6 +20,7 @@ import { 存储 } from "./存储引擎.js";
 import {
     渲染欢迎页, 渲染所有消息, 追加消息DOM, 显示加载动画, 移除加载动画,
     渲染输入区域, 发送消息流式,
+    创建流式恢复气泡, 是否流式中,
 } from "./消息渲染器.js";
 import { 显示设置面板, 显示创建项目对话框, 加载云端模型列表 } from "./设置面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
@@ -212,7 +213,12 @@ export function renderSidebarUI(container) {
     });
     refs.消息区域 = el("div", { class: "nca-messages" });
     refs.主内容区.appendChild(refs.消息区域);
-    渲染欢迎页(refs.消息区域, refs);
+    // 若流式输出进行中则恢复显示，否则渲染欢迎页
+    if (是否流式中()) {
+        创建流式恢复气泡(refs.消息区域, refs.消息区域);
+    } else {
+        渲染欢迎页(refs.消息区域, refs);
+    }
     refs.主内容区.appendChild(渲染模型切换栏());
     refs.主内容区.appendChild(渲染输入区域(refs, 根容器));
     根容器.appendChild(refs.主内容区);
@@ -236,6 +242,27 @@ export function renderSidebarUI(container) {
     显示登录弹窗(sidebarRoot, { asEntry: true, skipIfLoggedIn: true });
 
     绑定全局事件();
+
+    // ── 流式恢复：若刷新前有进行中的流式输出，恢复 UI 状态 ──
+    if (是否流式中()) {
+        // 禁用输入框和发送按钮
+        if (refs.输入框) refs.输入框.disabled = true;
+        if (refs.发送按钮) refs.发送按钮.disabled = true;
+        // 显示停止按钮
+        const stopBtn = el("button", { class: "nca-stop-btn", text: "■ 停止生成" });
+        stopBtn.addEventListener("click", () => {
+            const ctrl = 状态.流式状态.中止控制器;
+            if (ctrl) ctrl.abort();
+        });
+        refs.停止按钮容器 = stopBtn;
+        const inputArea = refs.输入框?.closest(".nca-input-area");
+        if (inputArea) inputArea.insertBefore(stopBtn, inputArea.firstChild);
+        // 广播状态
+        事件总线.emit(事件.发送状态变更, true);
+        事件总线.emit(事件.连接状态变更, "busy");
+        更新状态栏("生成中...");
+    }
+
     初始化();
 
     // 语言切换后整体重新渲染侧边栏，以刷新所有 t() 文本
@@ -582,6 +609,8 @@ export function renderSidebarUI(container) {
 
     // 取消当前会话：清空消息区域、显示欢迎页、清除当前会话ID、同步取消插件文件夹选中并刷新列表
     function 恢复欢迎页() {
+        // 流式输出进行中时不重置会话
+        if (是否流式中()) return;
         状态.当前会话ID = null;
         设置插件文件夹("");
         渲染欢迎页(refs.消息区域, refs);

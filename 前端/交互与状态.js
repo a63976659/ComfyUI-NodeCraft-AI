@@ -43,6 +43,8 @@ export const 事件 = {
     代码补全请求: "nca:code-completion-request",
     代码补全结果: "nca:code-completion-result",
     代码补全状态: "nca:code-completion-status",
+    // 流式输出状态追踪
+    流式状态变更: "streaming-state-changed",
 };
 
 // ─── 全局状态 ─────────────────────────────────────────────────
@@ -56,6 +58,18 @@ export const 状态 = {
     本地模型列表: [],
     选中本地模型: "",
     待发送附件: [],       // 文件附件列表 [{name, type, size, data}]
+    // ── 流式输出追踪（跨界面重建保持输出连续性）────────────────
+    流式状态: {
+        活跃: false,              // 是否有进行中的 SSE 流
+        累积内容: "",             // 已接收的完整内容
+        请求体: null,             // 当前流的原始请求体
+        中止控制器: null,         // 当前流的 AbortController
+        消息体引用: null,         // 当前流写入的 DOM 元素（可在重建时更换）
+        消息容器引用: null,       // 当前流的消息容器 DOM 引用
+        滚动容器引用: null,       // 当前流的滚动容器 DOM 引用
+        完成回调引用: null,       // 流结束时的完成回调（重建时更换）
+        工具指示器引用: null,     // 工具执行状态指示器 DOM 元素
+    },
     设置: {
         model_source: "api",
         local_path: "",

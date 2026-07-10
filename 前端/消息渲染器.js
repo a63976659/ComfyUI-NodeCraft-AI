@@ -615,6 +615,13 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
     // 3. 禁用发送按钮，显示"停止生成"按钮
     _isStreaming = true;
     状态.正在发送 = true;
+    状态.流式状态.活跃 = true;
+    状态.流式状态.累积内容 = "";
+    状态.流式状态.消息体引用 = aiBody;
+    状态.流式状态.消息容器引用 = aiBubble;
+    状态.流式状态.滚动容器引用 = refs.消息区域;
+    状态.流式状态.工具指示器引用 = null;
+    事件总线.emit(事件.流式状态变更, true);
     refs.输入框.disabled = true;
     refs.发送按钮.disabled = true;
     事件总线.emit(事件.发送状态变更, true);
@@ -633,6 +640,7 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
 
     // 4. 开始流式请求
     _abortController = new AbortController();
+    状态.流式状态.中止控制器 = _abortController;
     let hasError = false;
     let _toolExecutingEl = null; // 工具执行状态指示器元素（闭包共享）
 
@@ -657,12 +665,19 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
         return requestBody;
     })();
 
+    // 保存请求体到流式状态，供界面重建时引用
+    状态.流式状态.请求体 = 请求体对象;
+
     await 创建流式聊天({
         消息容器: aiBubble,
         消息体: aiBody,
         滚动容器: refs.消息区域,
+        获取消息容器: () => 状态.流式状态.消息容器引用,
+        获取消息体: () => 状态.流式状态.消息体引用,
+        获取滚动容器: () => 状态.流式状态.滚动容器引用,
         请求体: 请求体对象,
         中止信号: _abortController.signal,
+        内容更新回调: (内容) => { 状态.流式状态.累积内容 = 内容; },
         数据处理: (data, 状态引用) => {
             // ── 上下文健康度指标 - 不渲染为聊天消息 ──
             if (data.type === 'context_health') {
@@ -687,13 +702,21 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
             if (data.type === 'tool_executing') {
                 const toolMatch = (data.content || '').match(/\[正在执行:\s*(.+?)\.{3}\]/);
                 const toolName = 工具名显示(toolMatch ? toolMatch[1] : '工具');
-                if (!状态引用.el) {
+                const body = 状态.流式状态.消息体引用;
+                if (!状态引用.el && body) {
                     状态引用.el = document.createElement('div');
                     状态引用.el.className = 'nca-tool-executing';
-                    aiBody.appendChild(状态引用.el);
+                    body.appendChild(状态引用.el);
+                    状态.流式状态.工具指示器引用 = 状态引用.el;
+                } else if (状态引用.el && body && 状态引用.el.parentNode !== body) {
+                    // DOM 已被替换，重新挂载工具指示器元素
+                    状态引用.el.remove();
+                    状态引用.el = null;
                 }
-                状态引用.el.innerHTML = '<span class="tool-exec-icon">⚙️</span> 正在执行 <code></code><span class="tool-exec-dots"></span>';
-                状态引用.el.querySelector('code').textContent = toolName;
+                if (状态引用.el) {
+                    状态引用.el.innerHTML = '<span class="tool-exec-icon">⚙️</span> 正在执行 <code></code><span class="tool-exec-dots"></span>';
+                    状态引用.el.querySelector('code').textContent = toolName;
+                }
                 事件总线.emit(事件.状态栏更新, `执行工具: ${toolName}...`);
                 滚动到底部(refs);
                 return 'skip';
@@ -711,13 +734,15 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
             }
         },
         完成回调: (结果) => {
+            const cbBody = 状态.流式状态.消息体引用;
+            const cbContainer = 状态.流式状态.消息容器引用;
             // ── 规划面板分支：需用户确认执行计划 ──
             // 流式管理器在收到 planning_done 且 needs_confirmation 时，会提前结束并回传
             // { type: "planning", planResult }；此时渲染规划面板而非普通 Markdown 消息
             if (结果.type === "planning" && 结果.planResult) {
-                aiBody.innerHTML = ""; // 清除流式光标
+                if (cbBody) cbBody.innerHTML = ""; // 清除流式光标
                 import("./任务规划面板.js").then(({ 渲染规划面板 }) => {
-                    渲染规划面板(aiBody, 结果.planResult, {
+                    渲染规划面板(cbBody, 结果.planResult, {
                         会话id: 状态.当前会话ID,
                         原始请求体: 请求体对象,
                         // 确认：携带 skip_planning + user_choices 重新发起流式（新建 AI 气泡）
@@ -742,32 +767,43 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
                     });
                 }).catch((e) => {
                     console.warn("[节点梦工厂] 规划面板加载失败:", e);
-                    aiBody.innerHTML = 简易Markdown渲染(结果.fullContent || "（规划面板加载失败）");
-                    绑定代码块复制按钮(aiBubble);
+                    if (cbBody) cbBody.innerHTML = 简易Markdown渲染(结果.fullContent || "（规划面板加载失败）");
+                    绑定代码块复制按钮(cbContainer);
                 });
-                滚动到底部(refs);
+                // 使用当前流式状态的滚动容器（界面重建后可能已更换）
+                const currentScroll = 状态.流式状态.滚动容器引用;
+                if (currentScroll) {
+                    requestAnimationFrame(() => {
+                        currentScroll.scrollTop = currentScroll.scrollHeight;
+                    });
+                }
                 return; // 不执行后续的普通消息渲染
             }
 
             const { fullContent, hasError: err, isAbort, billing } = 结果;
             hasError = err;
             const 内容 = fullContent || "（无回复）";
-            aiBody.innerHTML = 简易Markdown渲染(内容);
-            if (!window.DOMPurify) {
-                aiBody.dataset.pendingSanitize = "true";
-                aiBubble._pendingContent = 内容;
+            if (cbBody) cbBody.innerHTML = 简易Markdown渲染(内容);
+            if (!window.DOMPurify && cbBody) {
+                cbBody.dataset.pendingSanitize = "true";
+                if (cbContainer) cbContainer._pendingContent = 内容;
             }
-            绑定代码块复制按钮(aiBubble);
+            绑定代码块复制按钮(cbContainer);
             // 显示本次消耗
-            if (billing) {
+            if (billing && cbContainer) {
                 const billingDOM = 创建消耗信息DOM(billing.cost, billing.balance);
-                if (billingDOM) aiBubble.appendChild(billingDOM);
+                if (billingDOM) cbContainer.appendChild(billingDOM);
             }
             // 记录到消息列表
             状态.当前消息列表.push({ role: "assistant", content: 内容, timestamp: Date.now(), billing });
             // 虚拟滚动启用时：移除流式临时气泡，让滚动器接管渲染
-            if (refs._虚拟滚动) {
-                if (aiBubble.parentNode) aiBubble.parentNode.removeChild(aiBubble);
+            // 注意：界面重建后 refs 可能指向旧实例，此时跳过虚拟滚动处理
+            if (refs._虚拟滚动 && refs._虚拟滚动.容器 === refs.消息区域) {
+                const oldBubble = 状态.流式状态.消息容器引用;
+                if (oldBubble && oldBubble.parentNode) oldBubble.parentNode.removeChild(oldBubble);
+                refs._虚拟滚动.追加新消息();
+            } else if (refs._虚拟滚动) {
+                // refs 已过时但虚拟滚动存在：仅追加消息数据，不操作旧 DOM
                 refs._虚拟滚动.追加新消息();
             } else {
                 _尝试启用虚拟滚动(refs);
@@ -779,6 +815,14 @@ export async function 发送消息流式(refs, rootContainer, options = {}) {
     _isStreaming = false;
     _abortController = null;
     状态.正在发送 = false;
+    状态.流式状态.活跃 = false;
+    状态.流式状态.累积内容 = "";
+    状态.流式状态.中止控制器 = null;
+    状态.流式状态.消息体引用 = null;
+    状态.流式状态.消息容器引用 = null;
+    状态.流式状态.滚动容器引用 = null;
+    状态.流式状态.工具指示器引用 = null;
+    事件总线.emit(事件.流式状态变更, false);
     refs.输入框.disabled = false;
     refs.发送按钮.disabled = false;
     事件总线.emit(事件.发送状态变更, false);
@@ -959,4 +1003,67 @@ function 渲染附件预览(refs) {
 function 更新发送按钮状态(refs) {
     const 有内容 = refs.输入框.value.trim().length > 0 || 状态.待发送附件.length > 0;
     refs.发送按钮.classList.toggle("active", 有内容);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 流式恢复 — 界面重建（侧边栏折叠/切换）时恢复进行中的流式输出
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 检查当前是否有进行中的流式输出
+ */
+export function 是否流式中() {
+    return 状态.流式状态.活跃;
+}
+
+/**
+ * 在界面重建时创建流式恢复气泡
+ * 将新的 DOM 元素引用写入全局流式状态，使后台 SSE 流继续渲染到新 DOM
+ *
+ * @param {HTMLElement} 消息区域 - 消息列表容器
+ * @param {HTMLElement} 滚动容器 - 滚动目标元素
+ * @returns {{ aiBody: HTMLElement, aiBubble: HTMLElement }|null}
+ */
+export function 创建流式恢复气泡(消息区域, 滚动容器) {
+    if (!状态.流式状态.活跃) return null;
+
+    const 累积内容 = 状态.流式状态.累积内容 || "";
+
+    // 创建 AI 回复气泡，显示已累积的内容和流式光标
+    const aiBubble = el("div", { class: "nca-msg assistant" }, [
+        el("div", { class: "nca-msg-header" }, [
+            el("span", { class: "msg-role", text: "─ AI" }),
+        ]),
+        el("div", { class: "nca-msg-body" }),
+    ]);
+    const aiBody = aiBubble.querySelector(".nca-msg-body");
+    if (累积内容) {
+        aiBody.innerHTML = 简易Markdown渲染(累积内容) + '<span class="nca-streaming-cursor"></span>';
+    } else {
+        aiBody.innerHTML = '<span class="nca-streaming-cursor"></span>';
+    }
+
+    // 清空消息区域并追加恢复气泡
+    if (消息区域.querySelector(".nca-welcome")) {
+        消息区域.innerHTML = "";
+    }
+    消息区域.appendChild(aiBubble);
+
+    // 更新全局流式状态中的 DOM 引用，使后台 SSE 流写入新 DOM
+    状态.流式状态.消息体引用 = aiBody;
+    状态.流式状态.消息容器引用 = aiBubble;
+    状态.流式状态.滚动容器引用 = 滚动容器 || 消息区域;
+
+    // 重置工具指示器引用（旧 DOM 已销毁）
+    状态.流式状态.工具指示器引用 = null;
+
+    // 滚动到底部
+    const scrollTarget = 滚动容器 || 消息区域;
+    if (scrollTarget) {
+        requestAnimationFrame(() => {
+            scrollTarget.scrollTop = scrollTarget.scrollHeight;
+        });
+    }
+
+    return { aiBody, aiBubble };
 }
