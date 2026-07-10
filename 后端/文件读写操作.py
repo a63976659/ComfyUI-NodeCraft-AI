@@ -397,6 +397,89 @@ def save_settings(settings):
 
 # ─── 插件脚手架 ───────────────────────────────────────────
 
+
+def _generate_readme_template(plugin_name: str) -> str:
+    """生成 8 模块结构的 README.md 模板"""
+    return f"""# {plugin_name}
+
+一个为 ComfyUI 打造的自定义节点插件，提供便捷的工作流增强能力。
+
+## 设计理念
+
+本插件注重简洁实用，遵循 ComfyUI 节点开发规范，力求在不增加学习成本的前提下提升创作效率。
+
+## 功能特点
+
+- 基于 ComfyUI V3 节点规范开发
+- 支持中文界面显示
+- 轻量级设计，无额外依赖
+
+## 界面预览
+
+（待补充截图或 GIF 演示）
+
+## 更新介绍
+
+- 插件初始化创建
+
+## 安装说明
+
+1. 将插件文件夹复制到 `ComfyUI/custom_nodes/` 目录下
+2. 重启 ComfyUI
+3. 在节点菜单中搜索插件名称即可使用
+
+## 开源协议
+
+本项目遵循 MIT 开源协议。
+
+## 致谢
+
+感谢 ComfyUI 社区提供的优秀插件生态和开发规范。
+"""
+
+
+def update_readme_changelog(plugin_path: str, changelog_entry: str) -> dict:
+    """在 README.md 的“更新介绍”模块追加一条更新记录
+
+    参数:
+        plugin_path: 插件根目录路径
+        changelog_entry: 一条简洁的更新说明（禁用专业术语）
+
+    返回:
+        {"success": bool, "message": str}
+    """
+    readme_path = Path(plugin_path) / "README.md"
+
+    if not readme_path.exists():
+        return {"success": False, "message": "README.md 不存在，请先创建插件"}
+
+    try:
+        content = readme_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"success": False, "message": f"读取 README.md 失败: {e}"}
+
+    # 定位“更新介绍”模块
+    marker = "## 更新介绍"
+    idx = content.find(marker)
+    if idx == -1:
+        # 没有该模块，在末尾追加
+        content += f"\n{marker}\n\n- {changelog_entry}\n"
+    else:
+        # 在该模块标题后插入新条目
+        insert_pos = idx + len(marker)
+        # 跳过标题后的换行
+        while insert_pos < len(content) and content[insert_pos] in "\r\n":
+            insert_pos += 1
+        content = content[:insert_pos] + f"- {changelog_entry}\n" + content[insert_pos:]
+
+    try:
+        readme_path.write_text(content, encoding="utf-8")
+    except Exception as e:
+        return {"success": False, "message": f"写入 README.md 失败: {e}"}
+
+    return {"success": True, "message": f"已更新 README 更新介绍: {changelog_entry}"}
+
+
 def create_plugin_scaffold(base_path, plugin_name):
     """一键生成合规的 ComfyUI 插件脚手架
 
@@ -411,12 +494,12 @@ def create_plugin_scaffold(base_path, plugin_name):
 
     try:
         target_path.mkdir()
-        (target_path / "逻辑处理模块").mkdir()
-        (target_path / "界面与静态资源").mkdir()
+        (target_path / "节点").mkdir()
+        (target_path / "网页资源").mkdir()
 
         init_content = (
             "# AI 自动生成的 ComfyUI 节点注册入口\n"
-            "WEB_DIRECTORY = \"./界面与静态资源\"\n"
+            "WEB_DIRECTORY = \"./网页资源\"\n"
             "\n"
             "NODE_CLASS_MAPPINGS = {}\n"
             "NODE_DISPLAY_NAME_MAPPINGS = {}\n"
@@ -425,7 +508,7 @@ def create_plugin_scaffold(base_path, plugin_name):
         (target_path / "__init__.py").write_text(init_content, encoding="utf-8")
 
         (target_path / "README.md").write_text(
-            f"# {plugin_name}\n\n基于 ComfyUI_AI_Coder 生成的自定义节点。",
+            _generate_readme_template(plugin_name),
             encoding="utf-8"
         )
 

@@ -133,6 +133,7 @@ _TOOL_USAGE_GUIDE = """
 - edit_file(file_path, patch): 增量编辑文件（仅修改需要变更的部分，适用于局部修改，更高效）
 - batch_edit(operations): 批量操作多个文件（适用于创建完整项目结构、同时修改多个文件）
 - list_plugin_files(): 查看插件的完整文件目录结构
+- update_readme(changelog_entry): 在 README.md 的“更新介绍”模块追加一条更新记录（每次任务完成后必须调用）
 
 ## 文件修改策略
 你有三种文件修改方式，请根据场景选择：
@@ -172,6 +173,13 @@ batch_edit 调用示例：
 
 优先级：**局部修改时优先使用 edit_file**，可以大幅节省 token 和时间。
 **创建完整项目时优先使用 batch_edit**，一次操作多个文件更高效。
+
+## 任务完成后的必要步骤
+每次任务完成后，**必须**调用 `update_readme` 工具，在 README.md 的“更新介绍”模块追加一条更新记录。
+要求：
+- 更新说明必须是一句简洁易懂的大白话，禁止使用专业术语
+- 例如：✅ “新增了图片风格转换功能”  ❌ “实现了基于 StyleGAN 的 latent space 映射”
+- 每次只在“更新介绍”模块追加，不要修改其他模块
 
 选择规则：
 - 当文件超过50行时，必须优先使用 edit_file 进行局部修改，而非 write_plugin_file 全量覆写。

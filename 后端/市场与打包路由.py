@@ -245,6 +245,7 @@ async def create_from_template(request):
         project_name = data.get("project_name", "").strip()
         entry_type = data.get("entry_type", "canvas")
         options = data.get("options", [])
+        custom_names = data.get("custom_names", {})
 
         if not template_id:
             return _error_response("缺少 template_id 参数")
@@ -253,7 +254,7 @@ async def create_from_template(request):
 
         # P1-1：同步文件复制/写入放入线程池
         result = await asyncio.to_thread(
-            _template_market.create_from_template, template_id, project_name, entry_type, options
+            _template_market.create_from_template, template_id, project_name, entry_type, options, custom_names
         )
         status = 200 if result["success"] else 400
         return web.json_response(result, status=status)

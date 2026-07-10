@@ -19,32 +19,33 @@ BUILTIN_TEMPLATES = [
 WEB_DIRECTORY = "./web"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 ''',
-            "nodes.py": '''class MyBasicNode:
+            "nodes.py": '''class 基础节点_Node:
     """基础自定义节点 - 字符串处理"""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "text": ("STRING", {"default": "Hello", "multiline": True}),
-                "prefix": ("STRING", {"default": "[Output] "}),
-                "to_upper": ("BOOLEAN", {"default": False}),
+                "文本": ("STRING", {"default": "Hello", "multiline": True}),
+                "前缀": ("STRING", {"default": "[输出] "}),
+                "转大写": ("BOOLEAN", {"default": False}),
             }
         }
 
     RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("result",)
+    RETURN_NAMES = ("处理结果",)
     FUNCTION = "execute"
-    CATEGORY = "Custom/Basic"
+    CATEGORY = "{custom_category}"
+    DESCRIPTION = "基础字符串处理节点，支持添加前缀和大写转换。"
 
-    def execute(self, text, prefix, to_upper):
-        result = text.upper() if to_upper else text
-        result = f"{prefix}{result}"
+    def execute(self, 文本, 前缀, 转大写):
+        result = 文本.upper() if 转大写 else 文本
+        result = f"{前缀}{result}"
         return (result,)
 
 
-NODE_CLASS_MAPPINGS = {"MyBasicNode": MyBasicNode}
-NODE_DISPLAY_NAME_MAPPINGS = {"MyBasicNode": "My Basic Node"}
+NODE_CLASS_MAPPINGS = {"基础节点": 基础节点_Node}
+NODE_DISPLAY_NAME_MAPPINGS = {"基础节点": "📦 基础节点 (Basic Node)"}
 ''',
             "requirements.txt": "# 无额外依赖\n",
             "README.md": "# My Basic Node\\n\\n基础 ComfyUI 自定义节点，支持字符串处理。\\n",
@@ -468,11 +469,11 @@ app.registerExtension({
         app.extensionManager.registerSidebarTab({
             id: "{project_name}-sidebar",
             icon: "pi pi-code",
-            title: "\u6211\u7684\u63d2\u4ef6",
-            tooltip: "\u6211\u7684\u4fa7\u8fb9\u680f\u63d2\u4ef6",
+            title: "{sidebar_title}",
+            tooltip: "{sidebar_title}",
             type: "custom",
             render: (container) => {
-                container.innerHTML = `<div style="padding:16px;"><h3>\u6211\u7684\u63d2\u4ef6</h3><p>\u5728\u6b64\u5904\u6784\u5efa\u4f60\u7684\u4fa7\u8fb9\u680f\u754c\u9762</p></div>`;
+                container.innerHTML = `<div style="padding:16px;"><h3>{sidebar_title}</h3><p>\u5728\u6b64\u5904\u6784\u5efa\u4f60\u7684\u4fa7\u8fb9\u680f\u754c\u9762</p></div>`;
             },
         });
     },
@@ -489,7 +490,7 @@ app.registerExtension({
             commands: [
                 {
                     id: "{project_name}.action",
-                    label: "\u6211\u7684\u547d\u4ee4",
+                    label: "{menu_label}",
                     function: () => {
                         console.log("\u83dc\u5355\u547d\u4ee4\u5df2\u6267\u884c");
                     },
@@ -509,7 +510,7 @@ app.registerExtension({
         if (statusBar) {
             const indicator = document.createElement("div");
             indicator.style.cssText = "display:flex;align-items:center;gap:4px;padding:0 8px;font-size:12px;";
-            indicator.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#4caf50;"></span><span>\u6211\u7684\u72b6\u6001</span>`;
+            indicator.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:#4caf50;"></span><span>{status_label}</span>`;
             statusBar.appendChild(indicator);
         }
     },
@@ -571,14 +572,22 @@ class TemplateMarket:
         return None
 
     def create_from_template(self, template_id: str, project_name: str,
-                             entry_type: str = "canvas", options: list = None) -> Dict:
+                             entry_type: str = "canvas", options: list = None,
+                             custom_names: dict = None) -> Dict:
         """从模板创建新项目
 
         entry_type: UI 扩展入口类型（canvas/sidebar/topMenu/statusBar），仅对 ui_extension 模板生效
         options: 附加能力列表（如 shortcuts/settings），在生成的 JS 中追加对应代码块
+        custom_names: 用户自定义名称，根据 entry_type 包含不同键：
+            - canvas: {"category": "节点分类名称"}
+            - sidebar: {"sidebar_title": "侧边栏显示名称"}
+            - topMenu: {"menu_label": "菜单显示名称"}
+            - statusBar: {"status_label": "状态栏显示名称"}
         """
         if options is None:
             options = []
+        if custom_names is None:
+            custom_names = {}
 
         template = self.get_template(template_id)
         if not template:
@@ -604,6 +613,10 @@ class TemplateMarket:
             if js_content is not None:
                 # sidebar/topMenu/statusBar 使用差异化骨架替换默认 JS
                 js_content = js_content.replace("{project_name}", project_name)
+                # 替换自定义显示名称占位符
+                js_content = js_content.replace("{sidebar_title}", custom_names.get("sidebar_title", "我的插件"))
+                js_content = js_content.replace("{menu_label}", custom_names.get("menu_label", "我的命令"))
+                js_content = js_content.replace("{status_label}", custom_names.get("status_label", "我的状态"))
             else:
                 # canvas 或未知类型：使用现有默认 JS
                 js_content = files.get("web/js/extensions.js", "")
@@ -616,6 +629,11 @@ class TemplateMarket:
 
             if js_content:
                 files["web/js/extensions.js"] = js_content
+
+        # basic_node 模板：替换自定义 CATEGORY
+        if template_id == "basic_node" and "nodes.py" in files:
+            custom_category = custom_names.get("category", "🔧 自定义工具/基础处理")
+            files["nodes.py"] = files["nodes.py"].replace("{custom_category}", custom_category)
 
         # 创建项目目录和文件
         target_dir.mkdir(parents=True)
