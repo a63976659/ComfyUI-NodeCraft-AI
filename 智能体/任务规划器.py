@@ -212,16 +212,62 @@ _规划系统提示词 = """你是 ComfyUI 插件开发的项目规划助理。
 基于用户的编程需求和当前项目上下文，执行以下分析：
 
 1. **复杂度评估**：判断任务复杂度（simple/moderate/complex）
-2. **执行计划**：列出具体执行步骤（最多5步，每步一句话）
-3. **风险识别**：可能影响现有功能的改动点
-4. **关键决策**：如果存在以下情况，生成需要用户确认的问题：
+
+2. **前端需求判断**：根据决策表判断是否需要 JS 钩子/UI 组件：
+   - 用户明确提到"界面""显示""预览""按钮""菜单""侧边栏""状态栏""进度" → needs_frontend: true
+   - 节点需要自定义输入控件（标准 Widget 没有的，如颜色选择器、画布绘图、文件拖拽）→ needs_frontend: true
+   - 节点需要实时反馈（执行进度、状态变化、Python→前端推送消息）→ needs_frontend: true
+   - 节点是纯数据处理（接收输入→计算→输出），无特殊显示需求 → needs_frontend: false
+   - 无法确定 → needs_frontend: "unknown"，并生成一个 question 让用户选择
+   - **默认倾向**：needs_frontend 默认为 false，只有明确需要前端能力时才设为 true
+
+3. **用户体验优化需求**：判断是否需要 UX 优化手段：
+   - 用户提到"记忆""记住""恢复""上次" → 需要状态持久化
+   - 用户提到"默认值""自动填充""智能推荐" → 需要智能默认值
+   - 用户提到"防抖""节流""不卡""流畅""性能" → 需要性能优化
+   - 用户提到"加载""骨架""loading""等待" → 需要加载状态
+   - 用户提到"错误""异常""提示""恢复" → 需要错误边界
+   - 以上任意触发 → needs_ux_optimization: true
+   - 无触发 → needs_ux_optimization: false
+   - **注意**：needs_ux_optimization 和 needs_frontend 是独立维度。纯 Python 节点也可能需要 UX 优化（如参数记忆）；有 JS 扩展也未必需要 UX 优化（如简单预览）
+
+4. **联动 UI 复杂度**：判断是否需要高级交互模式：
+   - 用户提到"联动""关联""依赖""级联" → 控件联动
+   - 用户提到"切换""模式""动态界面""条件显示" → 模式切换/条件UI
+   - 用户提到"设置""配置""选项联动" → 设置联动
+   - 以上任意触发且 needs_frontend 为 true → needs_interactive_ui: true
+   - 无触发或 needs_frontend 为 false → needs_interactive_ui: false
+   - 无法确定 → needs_interactive_ui: "unknown"
+
+5. **技术方案参考**：判断任务是否匹配已有技术方案类别：
+   - 匹配任一类别即填入 reference_categories 数组
+   - 可用类别："图像处理"、"模型调用"、"数据流"、"UI交互"
+   - 示例：图像滤镜/变换/合成 → ["图像处理"]；调用 LLM/加载模型 → ["模型调用"]；缓存/队列/增量计算 → ["数据流"]；自定义控件/进度显示/拖拽 → ["UI交互"]
+   - 无匹配 → []
+
+6. **执行计划**：列出具体执行步骤（最多5步，每步一句话）：
+   - 如果 needs_frontend 为 true，计划中必须包含创建 `网页资源/` 目录和 JS 文件的步骤
+   - 如果 needs_ux_optimization 为 true，计划中应包含"阅读用户体验优化指南"步骤
+   - 如果 reference_categories 非空，计划中应包含"查阅对应技术方案"步骤
+
+7. **风险识别**：可能影响现有功能的改动点
+
+8. **关键决策**：如果存在以下情况，生成需要用户确认的问题：
    - 存在互斥的实现方案
    - 改动范围不确定
    - 可能的破坏性变更
+   - needs_frontend 为 unknown 时，必须生成 question
 
 ## 输出格式（严格 JSON，不要包裹在代码块中）
 {
   "complexity": "simple|moderate|complex",
+  "needs_frontend": true,
+  "frontend_reason": "用户需要进度条显示处理状态",
+  "needs_ux_optimization": false,
+  "ux_reason": "",
+  "needs_interactive_ui": false,
+  "interactive_ui_reason": "",
+  "reference_categories": [],
   "plan_steps": ["步骤1", "步骤2", ...],
   "risk_notes": ["风险1", ...],
   "questions": [
@@ -231,9 +277,11 @@ _规划系统提示词 = """你是 ComfyUI 插件开发的项目规划助理。
 
 ## 规则
 - 如果任务简单明确，questions 为空数组 []
+- needs_frontend 为 unknown 时，必须生成 question 询问用户"是否需要前端界面"
 - 每个问题最多4个选项
 - plan_steps 最多5步
 - risk_notes 最多3条
+- reference_categories 最多2个类别
 - 全部中文输出
 - 只输出 JSON，不要任何其他文字"""
 
@@ -262,6 +310,54 @@ def _规范化计划(计划: dict) -> dict:
     复杂度 = 计划.get("complexity", "moderate")
     if 复杂度 not in ("simple", "moderate", "complex"):
         复杂度 = "moderate"
+
+    # --- 布尔字段规范化辅助 ---
+    def _规范布尔字段(值):
+        """true/false/unknown 三态规范化，容忍字符串/布尔混用"""
+        if isinstance(值, str):
+            值 = 值.lower()
+            if 值 in ("true", "是", "需要", "yes"):
+                return True
+            elif 值 in ("false", "否", "不需要", "no"):
+                return False
+            elif 值 == "unknown":
+                return "unknown"
+            else:
+                return False
+        elif isinstance(值, bool):
+            return 值
+        return False
+
+    # needs_frontend 规范化
+    需要前端 = _规范布尔字段(计划.get("needs_frontend"))
+    前端原因 = str(计划.get("frontend_reason", "")).strip() or ""
+    if not 前端原因 and 需要前端 is True:
+        前端原因 = "需要前端扩展能力"
+
+    # needs_ux_optimization 规范化
+    需要UX优化 = _规范布尔字段(计划.get("needs_ux_optimization"))
+    if 需要UX优化 not in (True, False):
+        需要UX优化 = False
+    UX原因 = str(计划.get("ux_reason", "")).strip() or ""
+    if not UX原因 and 需要UX优化 is True:
+        UX原因 = "需要用户体验优化"
+
+    # needs_interactive_ui 规范化
+    需要交互UI = _规范布尔字段(计划.get("needs_interactive_ui"))
+    交互UI原因 = str(计划.get("interactive_ui_reason", "")).strip() or ""
+    if not 交互UI原因 and 需要交互UI is True:
+        交互UI原因 = "需要高级交互模式"
+
+    # reference_categories 规范化
+    有效类别 = {"图像处理", "模型调用", "数据流", "UI交互"}
+    raw_cats = 计划.get("reference_categories")
+    参考类别 = []
+    if isinstance(raw_cats, list):
+        for c in raw_cats:
+            c_str = str(c).strip()
+            if c_str in 有效类别:
+                参考类别.append(c_str)
+        参考类别 = 参考类别[:2]  # 最多2个
 
     def _裁剪列表(值, 上限):
         if not isinstance(值, list):
@@ -293,6 +389,13 @@ def _规范化计划(计划: dict) -> dict:
 
     return {
         "complexity": 复杂度,
+        "needs_frontend": 需要前端,
+        "frontend_reason": 前端原因,
+        "needs_ux_optimization": 需要UX优化,
+        "ux_reason": UX原因,
+        "needs_interactive_ui": 需要交互UI,
+        "interactive_ui_reason": 交互UI原因,
+        "reference_categories": 参考类别,
         "plan_steps": plan_steps,
         "risk_notes": risk_notes,
         "questions": 问题列表,
@@ -363,6 +466,10 @@ async def 生成执行计划(user_message: str, plugin_path, llm_client, setting
     规范计划 = _规范化计划(计划)
     logger.info(
         f"[生成执行计划] 复杂度={规范计划['complexity']} "
+        f"前端={规范计划['needs_frontend']} "
+        f"UX={规范计划['needs_ux_optimization']} "
+        f"交互UI={规范计划['needs_interactive_ui']} "
+        f"参考={规范计划['reference_categories']} "
         f"步骤数={len(规范计划['plan_steps'])} "
         f"风险数={len(规范计划['risk_notes'])} "
         f"问题数={len(规范计划['questions'])}"

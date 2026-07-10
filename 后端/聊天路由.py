@@ -69,6 +69,116 @@ def _提取推理token数(model_source):
     return 0
 
 
+def _注入规划上下文(complete_messages: list, 计划结果: dict) -> None:
+    """将规划结果中的关键决策信息注入系统提示词。
+
+    注入内容包括：
+    - needs_frontend: 是否需要创建前端 JS 文件
+    - needs_ux_optimization: 是否需要 UX 优化手段
+    - needs_interactive_ui: 是否需要高级交互模式
+    - reference_categories: 应查阅的技术方案类别
+    - plan_steps: 执行步骤纲要
+    """
+    if not complete_messages or not 计划结果:
+        return
+
+    # system prompt 始终是 complete_messages 的第一条
+    if complete_messages[0]["role"] != "system":
+        return
+
+    parts = []
+
+    # 1. 前端需求决策
+    需要前端 = 计划结果.get("needs_frontend")
+    前端原因 = 计划结果.get("frontend_reason", "")
+    if 需要前端 is True and 前端原因:
+        parts.append(
+            f"\n## 规划决策：需要前端 JS 扩展\n"
+            f"- 原因：{前端原因}\n"
+            f"- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
+            f"- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+        )
+    elif 需要前端 is True:
+        parts.append(
+            f"\n## 规划决策：需要前端 JS 扩展\n"
+            f"- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
+            f"- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+        )
+    elif 需要前端 is False:
+        parts.append(
+            f"\n## 规划决策：无需前端 JS 扩展\n"
+            f"- 该插件为纯 Python 节点，不需要创建 `网页资源/` 目录\n"
+            f"- `__init__.py` 中不需要设置 `WEB_DIRECTORY`"
+        )
+
+    # 2. UX 优化需求
+    需要UX优化 = 计划结果.get("needs_ux_optimization")
+    UX原因 = 计划结果.get("ux_reason", "")
+    if 需要UX优化 is True:
+        原因文本 = f"（原因：{UX原因}）" if UX原因 else ""
+        parts.append(
+            f"\n## 规划决策：需要用户体验优化{原因文本}\n"
+            f"- 请务必查阅知识库 `开发插件/用户体验优化/减少繁复操作与流畅度提升.md`\n"
+            f"- 应用匹配的模式：状态持久化、智能默认值、防抖节流、加载状态、错误边界等\n"
+            f"- 注意：UX 优化可与前端 JS 共存，也可独立存在"
+        )
+
+    # 3. 交互 UI 复杂度
+    需要交互UI = 计划结果.get("needs_interactive_ui")
+    交互UI原因 = 计划结果.get("interactive_ui_reason", "")
+    if 需要交互UI is True:
+        原因文本 = f"（原因：{交互UI原因}）" if 交互UI原因 else ""
+        parts.append(
+            f"\n## 规划决策：需要高级交互 UI 模式{原因文本}\n"
+            f"- 请查阅知识库 `知识库/技术方案/UI交互/` 目录下对应方案\n"
+            f"- 常用模式：控件联动、模式切换动态UI、组件条件停用、设置联动UI\n"
+            f"- 交互复杂度较高，建议先理清状态流转再编码"
+        )
+
+    # 4. 技术方案参考
+    参考类别 = 计划结果.get("reference_categories", [])
+    if 参考类别:
+        cats_text = "、".join(参考类别)
+        parts.append(
+            f"\n## 规划决策：建议查阅技术方案（{cats_text}）\n"
+            f"- 知识库路径 `知识库/技术方案/` 下有已验证的实现参考\n"
+            f"- 请先搜索匹配的方案文档，复用已有经验，避免重复踩坑"
+        )
+
+    # 5. 执行步骤纲要
+    plan_steps = 计划结果.get("plan_steps", [])
+    if plan_steps:
+        steps_text = "\n".join(f"  {i+1}. {step}" for i, step in enumerate(plan_steps))
+        parts.append(f"\n## 规划执行步骤\n{steps_text}")
+
+    if parts:
+        complete_messages[0]["content"] += "".join(parts)
+
+
+def _注入用户决策前端标志(complete_messages: list, 用户选择: dict) -> None:
+    """从用户确认的决策中提取前端需求标志，注入系统提示词。"""
+    if not complete_messages or complete_messages[0]["role"] != "system":
+        return
+
+    for q, a in 用户选择.items():
+        a_lower = a.lower()
+        # 匹配用户关于需要/不需要前端的回答
+        if "前端" in q or "界面" in q or "js" in q.lower():
+            if any(kw in a_lower for kw in ("需要", "要", "是", "yes", "true")):
+                complete_messages[0]["content"] += (
+                    f"\n## 用户决策：需要前端 JS 扩展\n"
+                    f"- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
+                    f"- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+                )
+            elif any(kw in a_lower for kw in ("不需要", "不用", "否", "no", "false")):
+                complete_messages[0]["content"] += (
+                    f"\n## 用户决策：无需前端 JS 扩展\n"
+                    f"- 该插件为纯 Python 节点，不需要创建 `网页资源/` 目录\n"
+                    f"- `__init__.py` 中不需要设置 `WEB_DIRECTORY`"
+                )
+            break
+
+
 # 各Tab页的差异化系统提示词
 TAB_SYSTEM_PROMPTS = {
     "develop": (
@@ -927,6 +1037,13 @@ async def handle_chat_stream(request):
                             plan_data = json.dumps({
                                 "type": "planning_result",
                                 "complexity": 计划结果["complexity"],
+                                "needs_frontend": 计划结果.get("needs_frontend"),
+                                "frontend_reason": 计划结果.get("frontend_reason", ""),
+                                "needs_ux_optimization": 计划结果.get("needs_ux_optimization"),
+                                "ux_reason": 计划结果.get("ux_reason", ""),
+                                "needs_interactive_ui": 计划结果.get("needs_interactive_ui"),
+                                "interactive_ui_reason": 计划结果.get("interactive_ui_reason", ""),
+                                "reference_categories": 计划结果.get("reference_categories", []),
                                 "plan_steps": 计划结果["plan_steps"],
                                 "risk_notes": 计划结果.get("risk_notes", []),
                                 "questions": 计划结果["questions"]
@@ -943,11 +1060,21 @@ async def handle_chat_stream(request):
                             plan_data = json.dumps({
                                 "type": "planning_result",
                                 "complexity": 计划结果["complexity"],
+                                "needs_frontend": 计划结果.get("needs_frontend"),
+                                "frontend_reason": 计划结果.get("frontend_reason", ""),
+                                "needs_ux_optimization": 计划结果.get("needs_ux_optimization"),
+                                "ux_reason": 计划结果.get("ux_reason", ""),
+                                "needs_interactive_ui": 计划结果.get("needs_interactive_ui"),
+                                "interactive_ui_reason": 计划结果.get("interactive_ui_reason", ""),
+                                "reference_categories": 计划结果.get("reference_categories", []),
                                 "plan_steps": 计划结果["plan_steps"],
                                 "risk_notes": 计划结果.get("risk_notes", []),
                                 "questions": []
                             }, ensure_ascii=False)
                             await response.write(f"data: {plan_data}\n\n".encode('utf-8'))
+
+                            # 将规划上下文注入系统提示词（指导后续执行）
+                            _注入规划上下文(complete_messages, 计划结果)
                             # 不return，继续正常流式对话
             except asyncio.TimeoutError:
                 logger.warning("[规划阶段] 超时(10s)，自动降级进入工具循环")
@@ -958,6 +1085,9 @@ async def handle_chat_stream(request):
         if 用户选择:
             选择文本 = "\n".join(f"- {q}: {a}" for q, a in 用户选择.items())
             complete_messages[-1]["content"] += f"\n\n[用户已确认的决策]\n{选择文本}"
+
+            # 如果用户选择中包含前端需求决策，注入到系统提示词
+            _注入用户决策前端标志(complete_messages, 用户选择)
 
         try:
             if model_source == "local" and local_model_client is not None:
