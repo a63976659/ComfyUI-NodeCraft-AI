@@ -31,17 +31,23 @@ FILE_MODE_FILENAME = "文件模式.json"
 FUNCTION_MODE_FILENAME = "功能模式.json"
 META_VERSION = 1
 
-# 收集源码摘要时跳过的目录
+# 收集源码摘要时跳过的目录（含运行时数据目录）
 _SKIP_DIRS = {
     "__pycache__", "node_modules", ".git", ".venv", "venv",
     ".eggs", ".tox", ".mypy_cache", ".pytest_cache",
+    "数据", "logs",
     VISUALIZATION_DIR_NAME,
 }
+
+# 收集摘要时跳过的第三方库目录（避免库代码占用摘要配额）
+_LIB_SKIP_DIRS = {"lib", "vendor"}
 
 # 单文件摘要最大字符数（避免给 AI 喂太多）
 _MAX_SUMMARY_CHARS_PER_FILE = 1500
 # 总摘要最大字符数
 _MAX_TOTAL_SUMMARY_CHARS = 30000
+# JS 文件超过此大小跳过摘要（通常是压缩打包产物）
+_MAX_JS_SUMMARY_SIZE = 200 * 1024
 
 
 # ─── 路径与目录管理 ──────────────────────────────────────────
@@ -238,12 +244,12 @@ def collect_code_summary(plugin_path: Path) -> tuple:
     - code_summary_str: 拼接所有 .py/.js 摘要（带文件路径分隔，排除虚拟环境）
     """
     # 延迟导入避免循环依赖
-    from .插件分析器 import detect_virtualenv_dirs
+    from .插件分析器 import detect_virtualenv_dirs, is_path_in_env
 
     if not plugin_path.exists():
         return "", ""
 
-    # 检测虚拟环境目录
+    # 检测虚拟环境目录（返回相对路径，支持嵌套）
     env_dir_names = set(detect_virtualenv_dirs(plugin_path))
 
     tree_lines = []
@@ -258,8 +264,8 @@ def collect_code_summary(plugin_path: Path) -> tuple:
             continue
         if _should_skip_path(rel_parts):
             continue
-        # 跳过虚拟环境目录下的文件
-        if env_dir_names and any(p in env_dir_names for p in rel_parts[:-1]):
+        # 跳过虚拟环境目录下的文件（支持嵌套路径前缀匹配）
+        if is_path_in_env(rel_parts, env_dir_names):
             continue
         if item.is_file():
             all_files.append(item.relative_to(plugin_path))
@@ -267,33 +273,40 @@ def collect_code_summary(plugin_path: Path) -> tuple:
     # 构建 tree 字符串（虚拟环境目录折叠为单行）
     tree_lines.append(f"{plugin_path.name}/")
 
-    # 记录已在树中显示的虚拟环境目录（避免重复显示）
-    shown_env_dirs = set()
-
     for rel in all_files:
-        # 检查是否为虚拟环境目录下的文件（应被折叠）
-        top_dir = rel.parts[0] if len(rel.parts) > 1 else None
-        if top_dir and top_dir in env_dir_names:
-            if top_dir not in shown_env_dirs:
-                shown_env_dirs.add(top_dir)
-                # 统计环境目录文件数
-                env_path = plugin_path / top_dir
-                env_file_count = sum(1 for _ in env_path.rglob('*') if _.is_file())
-                tree_lines.append(f"  {top_dir}/ (虚拟环境, {env_file_count} 个文件, 已折叠)")
-            continue
-
         depth = len(rel.parts) - 1
         indent = "  " * (depth + 1)
         tree_lines.append(f"{indent}{rel.parts[-1]}")
+
+    # 虚拟环境目录用文件夹名代替内部全部文件，折叠为单行显示
+    for env_rel in sorted(env_dir_names):
+        env_path = plugin_path / env_rel
+        env_file_count = sum(1 for _ in env_path.rglob('*') if _.is_file())
+        tree_lines.append(f"  {env_rel}/ (虚拟环境, {env_file_count} 个文件, 已折叠)")
     file_tree_str = "\n".join(tree_lines)
 
-    # 收集 .py 和 .js 文件摘要（排除虚拟环境）
+    # 收集 .py 和 .js 文件摘要（排除虚拟环境与第三方库）
     for rel in all_files:
         suffix = rel.suffix.lower()
         if suffix not in (".py", ".js"):
             continue
 
+        # 跳过第三方库目录与压缩文件，避免占用摘要配额
+        if any(part in _LIB_SKIP_DIRS for part in rel.parts[:-1]):
+            continue
+        if rel.name.endswith(".min.js"):
+            continue
+
         full_path = plugin_path / rel
+
+        # 超大 JS 文件跳过摘要（通常是压缩打包产物）
+        if suffix == ".js":
+            try:
+                if full_path.stat().st_size > _MAX_JS_SUMMARY_SIZE:
+                    continue
+            except OSError:
+                continue
+
         try:
             source = full_path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -320,8 +333,8 @@ def collect_code_summary(plugin_path: Path) -> tuple:
     # 添加虚拟环境基础关联信息（仅目录名 + 类型，不展开内容）
     if env_dir_names:
         env_notes = ["\n=== 虚拟环境目录（仅基础关联，不展开分析） ==="]
-        for env_name in sorted(env_dir_names):
-            env_notes.append(f"  {env_name}/ → 隔离运行环境，包含该功能所需的第三方依赖")
+        for env_rel in sorted(env_dir_names):
+            env_notes.append(f"  {env_rel}/ → 隔离运行环境，包含该功能所需的第三方依赖")
         summary_blocks.append("\n".join(env_notes))
 
     return file_tree_str, "\n".join(summary_blocks)

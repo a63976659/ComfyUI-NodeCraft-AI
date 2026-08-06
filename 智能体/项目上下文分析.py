@@ -99,13 +99,16 @@ class 项目上下文分析器:
             except OSError:
                 return
 
-            # 过滤不需要的目录/文件
+            # 过滤不需要的目录/文件（含运行时数据目录与分析产物目录）
             skip = {
                 "__pycache__",
                 ".git",
                 "node_modules",
                 ".venv",
                 "venv",
+                "数据",
+                "logs",
+                "可视化",
             }
             entries = [
                 e for e in entries if e.name not in skip and not e.name.startswith(".")
@@ -116,8 +119,9 @@ class 项目上下文分析器:
                 connector = "└── " if is_last else "├── "
 
                 if entry.is_dir():
-                    # 虚拟环境目录折叠为单行
-                    if entry.name in env_dirs:
+                    # 虚拟环境目录折叠为单行（支持嵌套路径）
+                    entry_rel = entry.relative_to(plugin_path).as_posix()
+                    if entry_rel in env_dirs:
                         file_count = sum(1 for _ in entry.rglob('*') if _.is_file())
                         lines.append(f"{prefix}{connector}{entry.name}/ (虚拟环境, {file_count} 文件, 已折叠)")
                         continue
@@ -273,9 +277,9 @@ class 项目上下文分析器:
 
         lines = []
         for js_file in sorted(js_files):
-            # 跳过虚拟环境目录下的文件
+            # 跳过虚拟环境目录下的文件（支持嵌套路径前缀匹配）
             rel_parts = js_file.relative_to(plugin_path).parts
-            if any(p in env_dirs for p in rel_parts[:-1]):
+            if any("/".join(rel_parts[:i]) in env_dirs for i in range(1, len(rel_parts))):
                 continue
             if js_file.name.startswith(".") or "node_modules" in str(js_file):
                 continue
@@ -303,26 +307,45 @@ class 项目上下文分析器:
         return "\n".join(lines) if lines else ""
 
     def _检测虚拟环境(self, plugin_path: Path) -> set:
-        """检测插件目录下的虚拟环境子目录，返回目录名集合"""
+        """检测插件目录下的虚拟环境子目录（支持任意嵌套深度），返回相对路径集合"""
         env_dirs = set()
-        try:
-            for item in plugin_path.iterdir():
+
+        def _walk(current: Path, rel_prefix: str):
+            try:
+                entries = sorted(current.iterdir())
+            except OSError:
+                return
+            for item in entries:
                 if not item.is_dir() or item.name.startswith('.'):
                     continue
+                if item.name in {"__pycache__", "node_modules", ".git", "venv", ".venv"}:
+                    continue
+                rel = f"{rel_prefix}/{item.name}" if rel_prefix else item.name
+                # 锚点：pyvenv.cfg（任意深度有效）
                 if (item / 'pyvenv.cfg').exists():
-                    env_dirs.add(item.name)
-                elif (item / 'Lib' / 'site-packages').exists():
-                    env_dirs.add(item.name)
-                elif (item / 'lib').exists():
-                    has_python = any(
-                        d.name.startswith('python')
-                        for d in (item / 'lib').iterdir()
-                        if d.is_dir()
-                    )
-                    if has_python:
-                        env_dirs.add(item.name)
-        except OSError:
-            pass
+                    env_dirs.add(rel)
+                    continue
+                # 结构启发仅限一级目录
+                if not rel_prefix:
+                    if (item / 'Lib' / 'site-packages').exists():
+                        env_dirs.add(rel)
+                        continue
+                    lib_dir = item / 'lib'
+                    if lib_dir.exists():
+                        try:
+                            has_python = any(
+                                d.name.startswith('python')
+                                for d in lib_dir.iterdir()
+                                if d.is_dir()
+                            )
+                        except OSError:
+                            has_python = False
+                        if has_python:
+                            env_dirs.add(rel)
+                            continue
+                _walk(item, rel)
+
+        _walk(plugin_path, "")
         return env_dirs
 
     def 清除缓存(self, plugin_path: str = None):

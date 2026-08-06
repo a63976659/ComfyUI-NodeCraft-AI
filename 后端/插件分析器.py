@@ -13,6 +13,10 @@ IGNORED_DIRS = {
     '.eggs', '*.egg-info', '.tox', '.mypy_cache'
 }
 
+# 运行时数据目录（插件运行产生的会话/日志/分析产物等，不属于功能源码）
+# 可视化：本工具的分析输出目录，避免重新分析时把旧结果当作输入（自反馈闭环）
+RUNTIME_DATA_DIRS = {'数据', 'logs', '可视化'}
+
 # ComfyUI 节点类必需的属性
 NODE_REQUIRED_ATTRS = ['INPUT_TYPES', 'RETURN_TYPES', 'FUNCTION', 'CATEGORY']
 
@@ -201,48 +205,75 @@ def get_file_type(filepath: Path) -> str:
 
 def should_ignore_dir(dir_name: str) -> bool:
     """检查目录是否应被忽略"""
-    return dir_name in IGNORED_DIRS or dir_name.startswith('.')
+    return dir_name in IGNORED_DIRS or dir_name in RUNTIME_DATA_DIRS or dir_name.startswith('.')
 
 
 def detect_virtualenv_dirs(plugin_path: Path) -> list:
-    """检测插件目录下的虚拟环境目录。
+    """检测插件目录下的虚拟环境目录（支持任意嵌套深度）。
 
-    检测策略（满足任一即判定为虚拟环境）：
-    1. 目录内直接包含 pyvenv.cfg
-    2. 目录内直接包含 Lib/site-packages 或 lib/python* 结构
+    检测策略：
+    - 任意深度目录：包含 pyvenv.cfg 即判定为虚拟环境（发现后剪枝不再深入）
+    - 仅一级目录额外使用结构启发：Lib/site-packages 或 lib/python* 结构
+      （深层不用结构启发，避免误判正常的 lib 目录）
 
-    返回直接子目录名称列表（如 ['asr_env', 'gemma_env', 'llm_env']）
+    返回相对路径列表（如 ['asr_env', '数据/本地模型环境']）
     """
-    env_dirs = []
-    try:
-        for item in plugin_path.iterdir():
+    env_paths = []
+
+    def _walk(current: Path, rel_prefix: str):
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            return
+        for item in entries:
             if not item.is_dir():
                 continue
+            # 注意：这里不排除 RUNTIME_DATA_DIRS，因为虚拟环境可能嵌套在数据目录下
             if item.name in IGNORED_DIRS or item.name.startswith('.'):
                 continue
-            # 策略1：pyvenv.cfg 标记文件
+            rel = f"{rel_prefix}/{item.name}" if rel_prefix else item.name
+            # 锚点：pyvenv.cfg（任意深度有效）
             if (item / 'pyvenv.cfg').exists():
-                env_dirs.append(item.name)
+                env_paths.append(rel)
                 continue
-            # 策略2：典型虚拟环境结构
-            if (item / 'Lib' / 'site-packages').exists() or (item / 'lib').exists():
-                # 进一步确认：lib 下是否有 python* 子目录
+            # 结构启发仅限一级目录
+            if not rel_prefix:
+                if (item / 'Lib' / 'site-packages').exists():
+                    env_paths.append(rel)
+                    continue
                 lib_dir = item / 'lib'
                 if lib_dir.exists():
-                    has_python = any(
-                        d.name.startswith('python')
-                        for d in lib_dir.iterdir()
-                        if d.is_dir()
-                    )
+                    try:
+                        has_python = any(
+                            d.name.startswith('python')
+                            for d in lib_dir.iterdir()
+                            if d.is_dir()
+                        )
+                    except OSError:
+                        has_python = False
                     if has_python:
-                        env_dirs.append(item.name)
+                        env_paths.append(rel)
                         continue
-                # Lib/site-packages 已存在即判定
-                if (item / 'Lib' / 'site-packages').exists():
-                    env_dirs.append(item.name)
-    except OSError:
-        pass
-    return env_dirs
+            # 非虚拟环境，继续向深层递归
+            _walk(item, rel)
+
+    _walk(plugin_path, "")
+    return env_paths
+
+
+def is_path_in_env(rel_parts: tuple, env_paths) -> bool:
+    """判断相对路径的任一目录前缀是否落在虚拟环境目录内
+
+    Args:
+        rel_parts: 相对路径各段元组
+        env_paths: 虚拟环境相对路径集合（如 {'asr_env', '数据/本地模型环境'}）
+    """
+    if not env_paths:
+        return False
+    for i in range(1, len(rel_parts)):
+        if "/".join(rel_parts[:i]) in env_paths:
+            return True
+    return False
 
 
 def _count_dir_files(dir_path: Path) -> int:
@@ -267,8 +298,8 @@ def scan_directory(plugin_path: Path, env_dirs: list = None) -> list:
         parts = item.relative_to(plugin_path).parts
         if any(should_ignore_dir(p) for p in parts[:-1]):
             continue
-        # 跳过虚拟环境目录下的文件
-        if env_set and any(p in env_set for p in parts[:-1]):
+        # 跳过虚拟环境目录下的文件（支持嵌套路径前缀匹配）
+        if is_path_in_env(parts, env_set):
             continue
         if item.is_file():
             rel_path = str(item.relative_to(plugin_path)).replace('\\', '/')
@@ -675,8 +706,8 @@ def analyze_plugin(plugin_path_str: str) -> dict:
 
     # 7. 为虚拟环境目录生成折叠节点（每个环境目录 → 1个节点）
     env_node_count = 0
-    for env_name in env_dir_names:
-        env_path = plugin_path / env_name
+    for env_rel in env_dir_names:
+        env_path = plugin_path / env_rel
         file_count = _count_dir_files(env_path)
         # 计算总大小
         total_size = 0
@@ -690,13 +721,13 @@ def analyze_plugin(plugin_path_str: str) -> dict:
             pass
 
         nodes.append({
-            "id": f"{env_name}/",
-            "name": env_name,
+            "id": f"{env_rel}/",
+            "name": env_rel.split('/')[-1],
             "type": "env",
             "size": total_size,
             "status": "normal",
             "group": "运行环境",
-            "reason": f"虚拟环境目录（{file_count} 个文件，{total_size // (1024*1024)} MB），仅做基础关联不展开分析"
+            "reason": f"虚拟环境目录 {env_rel}（{file_count} 个文件，{total_size // (1024*1024)} MB），仅做基础关联不展开分析"
         })
         env_node_count += 1
 
