@@ -14,17 +14,30 @@ NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 # 3. 初始化统一日志系统（在导入任何后端模块之前）
-from 后端.日志配置 import 初始化日志系统, 获取日志器
-初始化日志系统()
-logger = 获取日志器("启动")
+# 两段式导入：基础设施失败时回退标准 logging，保证 WEB_DIRECTORY 等
+# 已声明的导出仍能被 ComfyUI 读到，避免整个插件被标记为加载失败
+try:
+    from 后端.日志配置 import 初始化日志系统, 获取日志器
+
+    初始化日志系统()
+    logger = 获取日志器("启动")
+except Exception as _e:
+    import logging
+
+    logger = logging.getLogger("NodeCraft-AI.启动")
+    logger.exception(f"日志系统初始化失败，回退标准 logging: {_e}")
 
 # 输出项目版本号
-from 后端.系统环境映射 import 项目版本
-logger.info(f"NodeCraft AI v{项目版本} 启动中...")
+try:
+    from 后端.系统环境映射 import 项目版本
+
+    logger.info(f"NodeCraft AI v{项目版本} 启动中...")
+except Exception as _e:
+    logger.exception(f"系统环境映射加载失败: {_e}")
 
 # 4. 导入后端路由，装饰器在模块加载时自动注册
 try:
-    from 后端 import 接口路由
+    from 后端 import 接口路由  # noqa: F401  导入即注册路由，无需直接引用
     logger.info("后端接口路由加载成功！")
 except Exception as e:
     logger.exception(f"后端加载失败: {e}")
@@ -32,6 +45,7 @@ except Exception as e:
 # 5. 在路由注册完成后执行数据迁移
 try:
     import asyncio
+
     from 后端.数据迁移 import 执行迁移
     try:
         loop = asyncio.get_event_loop()

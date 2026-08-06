@@ -1,0 +1,16 @@
+# NodeCraft AI — 工具链配置
+# 说明：本插件不作为 Python 包发布（ComfyUI 直接加载目录），
+# 因此这里只承载 ruff 静态检查配置。
+#
+# 规则集沿用 ruff 默认值（E4/E7/E9 + F），与 CI 的 `ruff check .` 保持一致。
+# 如需扩大规则集，应先评估既有代码的违规量，避免噪声淹没真实问题。
+
+[tool.ruff]
+# 数据/ 目录含本地模型 venv（数据/本地模型环境）与运行时产物，不参与检查
+extend-exclude = ["数据"]
+
+[tool.ruff.lint]
+# E402（import 不在文件顶部）：本项目使用中文模块名，各模块需先
+# sys.path.insert 注入插件根目录再导入（如 from 后端.日志配置 import ...），
+# 这是 ComfyUI 插件的必要写法，全库 58 处均属此模式，故整体豁免。
+ignore = ["E402"]
