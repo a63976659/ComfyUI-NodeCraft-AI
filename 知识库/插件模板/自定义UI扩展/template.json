@@ -1,0 +1,7 @@
+{
+    "id": "custom-ui-extension",
+    "name": "自定义UI扩展",
+    "description": "前端 UI 扩展模板：自定义 widget、侧边栏按钮、Python-JS 通信、生命周期钩子",
+    "category": "UI扩展",
+    "files": ["__init__.py", "js/custom_widget.js", "README.md"]
+}

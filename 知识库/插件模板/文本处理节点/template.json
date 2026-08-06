@@ -1,0 +1,7 @@
+{
+    "id": "text-process-node",
+    "name": "文本处理节点",
+    "description": "STRING 多行输入输出 + 文本编码/解码 + 模板替换",
+    "category": "文本处理",
+    "files": ["__init__.py", "text_node.py", "README.md"]
+}
