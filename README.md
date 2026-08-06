@@ -212,7 +212,6 @@ NodeCraft AI 采用清晰的四层架构设计：
 ## 🙏 致谢
 
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — 强大的节点式 AI 图像生成平台
-- [comfyui-custom-node-skills](https://github.com/comfyanonymous/comfyui-custom-node-skills) — ComfyUI 自定义节点开发知识来源
 
 ---
 
