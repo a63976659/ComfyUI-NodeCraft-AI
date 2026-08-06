@@ -142,6 +142,7 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
         modelscope:  { label: "魔搭 ModelScope", base_url: "https://api-inference.modelscope.cn/v1", help: "https://modelscope.cn/my/myaccesstoken" },
         siliconflow: { label: "硅基流动 SiliconFlow", base_url: "https://api.siliconflow.cn/v1", help: "https://cloud.siliconflow.cn/account/ak" },
         openrouter:  { label: "OpenRouter",  base_url: "https://openrouter.ai/api/v1",          help: "https://openrouter.ai/keys" },
+        dashscope:   { label: "阿里云百炼 千问", base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", help: "https://bailian.console.aliyun.com/?apiKey=1#/api-key", model: "Qwen3.8-Max" },
         custom:      { label: t("settings.provider_custom"), base_url: "",                                     help: "" },
     };
 
@@ -205,11 +206,15 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
     }
     apiModelInput.addEventListener("input", 刷新MaxTokens默认提示);
 
-    // 供应商切换时联动填充 base_url（可手动修改）
+    // 供应商切换时联动填充 base_url（可手动修改）；预设带默认模型的同步填充模型名
     apiProviderSelect.addEventListener("change", () => {
         const cfg = 供应商预设[apiProviderSelect.value];
         if (cfg && apiProviderSelect.value !== "custom") {
             apiBaseUrlInput.value = cfg.base_url;
+            if (cfg.model) {
+                apiModelInput.value = cfg.model;
+                刷新MaxTokens默认提示();
+            }
         }
         更新帮助链接();
     });
