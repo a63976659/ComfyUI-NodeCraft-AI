@@ -1,0 +1,282 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 文件夹选择器
+   文件夹选择器 .nc-folder-selector / .nc-folder-search
+   .nc-folder-list / .nc-folder-item / .nc-folder-external
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 文件夹选择器折叠外层包装 ─── */
+.nc-folder-selector-wrapper {
+    display: flex;
+    flex-direction: column;
+    background: var(--nca-bg-tinted);
+    border-bottom: 1px solid var(--nca-border);
+    flex-shrink: 0;
+}
+
+/* 折叠标题栏 */
+.nc-folder-selector-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    cursor: pointer;
+    user-select: none;
+    background: var(--nca-overlay);
+    border-bottom: 1px solid var(--nca-border);
+    transition: background var(--nca-transition-fast), border-color var(--nca-transition-fast);
+}
+
+.nc-folder-selector-toggle:hover {
+    background: var(--nca-accent-dim);
+    border-bottom-color: var(--nca-accent-glow);
+}
+
+.nc-folder-selector-arrow {
+    flex: 0 0 auto;
+    width: 12px;
+    color: var(--nca-accent);
+    font-size: 10px;
+    line-height: 1;
+    transition: transform var(--nca-transition-fast);
+}
+
+/* 展开时箭头旋转 90 度 */
+.nc-folder-selector-wrapper:not(.collapsed) .nc-folder-selector-arrow {
+    transform: rotate(90deg);
+}
+
+.nc-folder-selector-title {
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--nca-fg);
+    letter-spacing: 0.5px;
+}
+
+/* 已选文件夹名：仅折叠时显示，并占据剩余空间居中 */
+.nc-selected-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--nca-accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: none;
+}
+
+.nc-folder-selector-wrapper.collapsed .nc-selected-name:not(:empty) {
+    display: inline-block;
+}
+
+/* ─── 标题栏内代码审查按钮 ─── */
+.nc-folder-selector-toggle .nca-review-btn {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+/* disabled 状态：穿透鼠标事件，使点击落在标题栏上触发折叠 */
+.nc-folder-selector-toggle .nca-review-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* 折叠时隐藏内容区 */
+.nc-folder-selector-wrapper.collapsed .nc-folder-selector-content {
+    display: none;
+}
+
+/* 内容区内边距与原始选择器一致，取消重复背景与边框 */
+.nc-folder-selector-content.nc-folder-selector {
+    border-bottom: none;
+    background: transparent;
+}
+
+/* ─── 文件夹选择器组件 ─── */
+.nc-folder-selector {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nca-space-xs);
+    padding: var(--nca-space-sm) var(--nca-space-md);
+    background: var(--nca-bg-tinted);
+    border-bottom: 1px solid var(--nca-border);
+    flex-shrink: 0;
+}
+
+.nc-folder-search-row {
+    display: flex;
+    align-items: stretch;
+    gap: var(--nca-space-xs);
+}
+
+.nc-folder-search {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    background: var(--nca-bg-input);
+    border: 1px solid var(--nca-border-hover);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg);
+    font-size: 12px;
+    outline: none;
+    transition: border-color var(--nca-transition-fast);
+    box-sizing: border-box;
+}
+
+.nc-folder-search:focus {
+    border-color: var(--nca-accent);
+}
+
+.nc-folder-search::placeholder {
+    color: var(--nca-fg-dim);
+}
+
+.nc-folder-reset {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    box-sizing: border-box;
+    background: var(--nca-bg-input);
+    border: 1px solid var(--nca-border-hover);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-fg-dim);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background var(--nca-transition-fast), color var(--nca-transition-fast), border-color var(--nca-transition-fast);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.nc-folder-reset:hover {
+    background: var(--nca-accent-dim);
+    border-color: var(--nca-accent-glow);
+    color: var(--nca-accent);
+}
+
+.nc-folder-reset:active {
+    background: var(--nca-accent-dim);
+}
+
+.nc-folder-reset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.nc-folder-reset-icon {
+    display: inline-block;
+    transition: transform var(--nca-transition-normal);
+}
+
+.nc-folder-reset:hover .nc-folder-reset-icon {
+    transform: rotate(-90deg);
+}
+
+.nc-folder-reset:disabled .nc-folder-reset-icon {
+    transform: none;
+}
+
+.nc-folder-list {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius-sm);
+    background: var(--nca-overlay);
+}
+
+.nc-folder-item {
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    cursor: pointer;
+    transition: background var(--nca-transition-fast), color var(--nca-transition-fast);
+    border-left: 2px solid transparent;
+}
+
+.nc-folder-item:hover {
+    background: var(--nca-accent-dim);
+    color: var(--nca-fg);
+}
+
+.nc-folder-item.selected {
+    background: var(--nca-accent-dim);
+    color: var(--nca-accent);
+    border-left: 2px solid var(--nca-accent);
+}
+
+.nc-folder-external {
+    width: 100%;
+    padding: var(--nca-space-sm);
+    background: var(--nca-accent-dim);
+    border: 1px dashed var(--nca-accent-glow);
+    border-radius: var(--nca-radius-sm);
+    color: var(--nca-accent);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background var(--nca-transition-fast);
+}
+
+.nc-folder-external:hover {
+    background: var(--nca-accent-dim);
+}
+
+/* ═══ 浅色主题适配 ═══
+   折叠标题栏保留蓝色基调 (#2563eb) 低透；
+   文件夹列表 / 预览框区域改为默认浅白底，避免色块过重。 */
+.nca-theme-light .nc-folder-selector-wrapper {
+    background: #ffffff;
+}
+
+.nca-theme-light .nc-folder-selector-toggle {
+    background: rgba(37, 99, 235, 0.06);
+    border-bottom-color: var(--nca-border);
+}
+
+.nca-theme-light .nc-folder-selector-toggle:hover {
+    background: rgba(37, 99, 235, 0.1);
+    border-bottom-color: var(--nca-accent-glow);
+}
+
+.nca-theme-light .nc-folder-selector {
+    background: #ffffff;
+}
+
+.nca-theme-light .nc-folder-list {
+    background: #ffffff;
+    border-color: var(--nca-border);
+}
+
+.nca-theme-light .nc-folder-item {
+    color: var(--nca-fg-dim);
+}
+
+.nca-theme-light .nc-folder-item:hover {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--nca-fg);
+}
+
+.nca-theme-light .nc-folder-item.selected {
+    background: rgba(37, 99, 235, 0.15);
+    color: var(--nca-accent);
+    border-left-color: var(--nca-accent);
+}
+
+.nca-theme-light .nc-folder-search {
+    background: var(--nca-bg-input);
+}
+
+.nca-theme-light .nc-folder-reset {
+    background: rgba(37, 99, 235, 0.06);
+    color: var(--nca-fg-dim);
+}
+
+.nca-theme-light .nc-folder-reset:hover {
+    background: rgba(37, 99, 235, 0.12);
+    color: var(--nca-accent);
+}

@@ -1,0 +1,167 @@
+/* ═══════════════════════════════════════════════════════════════
+   NodeCraft AI — 状态栏与底部
+   底部状态栏 .nca-status-bar（含状态点、左右分组、分隔符）
+   底部版本信息栏 .nca-footer-version
+   项目信息栏 .nc-project-bar / .nc-project-name / .nc-new-project-btn
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─── 状态栏 ──────────────────────────────────────────────── */
+.nca-status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--nca-space-md);
+    height: 28px;
+    box-sizing: border-box;
+    font-size: 10px;
+    font-family: var(--nca-font-mono);
+    color: var(--nca-fg-muted);
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-primary);
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
+}
+
+.nca-status-bar .status-left {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-xs);
+}
+
+.nca-status-bar .status-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--nca-green);
+    box-shadow: 0 0 var(--nca-space-xs) var(--nca-green);
+}
+
+.nca-status-bar .status-dot.busy {
+    background: var(--nca-warning);
+    box-shadow: 0 0 var(--nca-space-xs) var(--nca-warning);
+    animation: nca-glow-pulse 1.2s infinite;
+}
+
+.nca-status-bar .status-dot.error {
+    background: var(--nca-error);
+    box-shadow: 0 0 var(--nca-space-xs) var(--nca-error);
+}
+
+.nca-status-bar .status-right {
+    display: flex;
+    align-items: center;
+    gap: var(--nca-space-sm);
+}
+
+.nca-status-bar .status-separator {
+    color: var(--nca-fg-muted);
+    opacity: 0.5;
+}
+
+/* ─── 底部版本信息栏 ──────────────────────────────────────── */
+.nca-footer-version {
+    margin-top: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 var(--nca-space-md);
+    height: 36px;
+    box-sizing: border-box;
+    font-size: 12px;
+    color: var(--nca-fg-muted);
+    font-family: var(--nca-font-mono);
+    border-top: 1px solid var(--nca-border);
+    background: var(--nca-bg-primary);
+    letter-spacing: 0.3px;
+}
+
+/* --- Project Info Bar --- */
+.nc-project-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--nca-space-xs) var(--nca-space-md);
+    margin: var(--nca-space-xs) var(--nca-space-sm);
+    background: var(--nca-hover-overlay);
+    border: 1px solid var(--nca-border);
+    border-radius: var(--nca-radius);
+    flex-shrink: 0;
+}
+
+.nc-project-name {
+    font-size: 12px;
+    color: var(--nca-fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.nc-new-project-btn {
+    font-size: 11px;
+    color: var(--nca-accent);
+    background: var(--nca-accent-dim);
+    border: 1px solid var(--nca-accent-glow);
+    border-radius: var(--nca-radius-sm);
+    padding: var(--nca-space-xs) var(--nca-space-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    margin-left: var(--nca-space-sm);
+    transition: all var(--nca-transition-fast);
+}
+
+.nc-new-project-btn:hover {
+    background: var(--nca-accent-dim);
+    border-color: var(--nca-accent);
+}
+
+/* 上下文健康度指示器 */
+.nca-context-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-secondary, #8b949e);
+}
+
+.context-bar-bg {
+    width: 40px;
+    height: 4px;
+    background: var(--bg-tertiary, #21262d);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.context-bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    transition: width 0.3s ease, background-color 0.3s ease;
+    background: var(--accent-color, #58a6ff);
+}
+
+.context-bar-fill.level-info {
+    background: var(--accent-color, #58a6ff);
+}
+
+.context-bar-fill.level-warning {
+    background: #f59e0b;
+}
+
+.context-bar-fill.level-critical {
+    background: #ef4444;
+}
+
+/* ─── 状态栏信息分级（次要信息hover展开）───────── */
+.nca-status-secondary {
+    opacity: 0;
+    max-width: 0;
+    overflow: hidden;
+    transition: opacity 0.3s, max-width 0.3s;
+    white-space: nowrap;
+}
+.nca-status-bar:hover .nca-status-secondary {
+    opacity: 1;
+    max-width: 200px;
+}
