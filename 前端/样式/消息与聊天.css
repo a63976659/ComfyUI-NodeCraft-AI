@@ -56,8 +56,12 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    height: 100%;
+    /* min-height 代替 height：内容不足时仍撑满容器并居中；
+       内容超出容器高度时容器随内容自然延伸，由外层 .nca-messages 滚动承载，
+       避免固定 height:100% + 居中导致的溢出裁切（快捷按钮被推出可视区且滚动不可达）。
+       safe center：即便出现溢出也退化为起端对齐，保证内容可滚动到达 */
+    justify-content: safe center;
+    min-height: 100%;
     text-align: center;
     padding: var(--nca-space-2xl);
     gap: var(--nca-space-md);
