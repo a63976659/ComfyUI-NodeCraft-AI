@@ -7,8 +7,6 @@ import {
     事件总线, 事件, 状态,
     获取会话列表,
     加载设置, 保存设置, 更新模型选择, 切换API配置, 设置插件文件夹,
-    支持思考深度, 当前思考深度, 切换思考深度,
-    支持思考开关, 当前思考模式, 切换思考模式,
     获取当前模型名称, 获取会话序号,
     获取本地模型列表,
     请求,
@@ -26,10 +24,11 @@ import {
 } from "./消息渲染器.js";
 import { 显示设置面板, 显示创建项目对话框 } from "./设置面板.js";
 import { 创建会话列表面板 } from "./会话列表面板.js";
+import { 创建思考按钮组 } from "./思考按钮组.js";
 import { t, 监听语言切换, 获取当前语言, 切换语言 } from "./i18n.js";
 
 // 版本信标：浏览器端读 window.__NCA_VIEW_BUILD 即可确定执行的是否为最新模块
-window.__NCA_VIEW_BUILD = "r10-20260807-1500";
+window.__NCA_VIEW_BUILD = "r11-20260807-1900";
 
 // 语言切换监听器取消句柄（跨序于 renderSidebarUI 多次调用，需在重渲染前取消以避免重复注册）
 let _unsubLang = null;
@@ -772,43 +771,12 @@ export function renderSidebarUI(container) {
         const API下拉 = el("select", { class: "nca-model-select nca-api-model-select" });
         API下拉.style.display = 状态.模型来源 === "api" ? "" : "none";
         API下拉.title = "选择 API 模型";
-        // 思考深度按钮：仅 API 模式且模型支持（Kimi K3 等）时可见，点击循环切换档位（与释放显存按钮同位置复用）
-        const 思考深度按钮 = el("button", {
-            class: "nca-unload-btn nca-reasoning-btn",
-            title: t("model.reasoning_title"),
-        });
-        function 刷新思考深度按钮() {
-            // 思考已显式关闭时隐藏深度按钮（与后端一致：关闭思考不再传 reasoning_effort）
-            const 支持 = 状态.模型来源 === "api" && 支持思考深度(状态.设置.model_name)
-                && 当前思考模式() !== "off";
-            思考深度按钮.style.display = 支持 ? "" : "none";
-            if (!支持) return;
-            const 档位 = 当前思考深度();
-            思考深度按钮.dataset.ncaLabel = `${t("model.reasoning")}: ${档位 || t("model.reasoning_default")}`;
-            思考深度按钮.classList.toggle("active", !!档位);
-        }
-        // 思考开关按钮：仅 API 模式且模型可开关思考（DeepSeek V4 / Kimi K2.6・K2.5 / 千问 Qwen3）时可见
-        const 思考开关按钮 = el("button", {
-            class: "nca-unload-btn nca-thinking-btn",
-            title: t("model.thinking_title"),
-        });
-        function 刷新思考开关按钮() {
-            const 支持 = 状态.模型来源 === "api" && 支持思考开关(状态.设置.model_name);
-            思考开关按钮.style.display = 支持 ? "" : "none";
-            if (!支持) return;
-            const 状态值 = 当前思考模式();
-            const 文案 = 状态值 === "on" ? t("model.thinking_on")
-                : 状态值 === "off" ? t("model.thinking_off") : t("model.thinking_default");
-            思考开关按钮.dataset.ncaLabel = `${t("model.thinking")}: ${文案}`;
-            // 只有显式开启才高亮，显式关闭用独立样式区分于“跟随默认”
-            思考开关按钮.classList.toggle("active", 状态值 === "on");
-            思考开关按钮.classList.toggle("off", 状态值 === "off");
-        }
+        // 思考档位按钮：规格表驱动的共用按钮组（与各面板同一实现，见 思考按钮组.js）
+        const 思考按钮组 = 创建思考按钮组();
         切换栏.appendChild(本地下拉);
         切换栏.appendChild(释放显存按钮);
         切换栏.appendChild(API下拉);
-        切换栏.appendChild(思考开关按钮);
-        切换栏.appendChild(思考深度按钮);
+        思考按钮组.节点.forEach((按钮) => 切换栏.appendChild(按钮));
 
         // 用占位选项设置下拉框的单一提示态（加载中 / 未配置 / 云端不可达）
         function 设置API占位(文本) {
@@ -849,8 +817,7 @@ export function renderSidebarUI(container) {
             刷新本地下拉();
             // 仅在 API 模式下拉取/刷新云端模型列表，避免本地模式下无谓请求
             if (状态.模型来源 === "api") 刷新API下拉();
-            刷新思考开关按钮();
-            刷新思考深度按钮();
+            思考按钮组.刷新();
         }
 
         本地按钮.addEventListener("click", async () => {
@@ -869,19 +836,6 @@ export function renderSidebarUI(container) {
             if (!API下拉.value) return;
             await 切换API配置(API下拉.value);
             更新状态栏("就绪");
-        });
-        思考开关按钮.addEventListener("click", async () => {
-            if (思考开关按钮.disabled) return;
-            思考开关按钮.disabled = true;
-            try { await 切换思考模式(); } finally { 思考开关按钮.disabled = false; }
-            刷新思考开关按钮();  // 设置已保存事件也会刷新，此处确保持久化失败时标签也即时回显
-            刷新思考深度按钮();  // 关闭/恢复思考会连带改变深度按钮的可见性
-        });
-        思考深度按钮.addEventListener("click", async () => {
-            if (思考深度按钮.disabled) return;
-            思考深度按钮.disabled = true;
-            try { await 切换思考深度(); } finally { 思考深度按钮.disabled = false; }
-            刷新思考深度按钮();  // 设置已保存事件也会刷新，此处确保持久化失败时标签也即时回显
         });
         释放显存按钮.addEventListener("click", async () => {
             if (释放显存按钮.disabled) return;

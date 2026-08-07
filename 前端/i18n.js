@@ -94,14 +94,11 @@ const 语言包 = {
         // ── 模型切换栏 ─────────────────────────────────
         'model.release_vram':   '释放显存',
         'model.release_vram_title': '卸载本地模型，释放显存/内存',
-        'model.reasoning':      '思考深度',
-        'model.reasoning_default': '默认',
-        'model.reasoning_title': '点击循环切换思考深度：默认→low→high→max。仅 Kimi K3、DeepSeek V4 等支持 reasoning_effort 的模型可用；max 最深度但又慢又贵，日常开发建议 high 或 low',
         'model.thinking':       '思考',
         'model.thinking_default': '默认',
         'model.thinking_on':    '开',
         'model.thinking_off':   '关',
-        'model.thinking_title': '点击循环切换思考模式：默认（不传参数）→开→关。DeepSeek V4 与 Kimi K2.6/K2.5 转为 thinking.type，千问 Qwen3 转为 enable_thinking；Kimi K3 始终思考无法关闭。关闭后响应更快、更便宜，复杂任务建议保持开启', 
+        'model.thinking_title': '点击循环切换思考档位：默认→开→关→low→high→max（档位随模型能力增减）。默认=不传参数跟随服务端；开/关对应 DeepSeek V4 与 Kimi K2.6/K2.5 的 thinking.type、千问 Qwen3 的 enable_thinking；low/high/max 为思考深度（reasoning_effort），仅 Kimi K3、DeepSeek V4 支持，max 最深度但又慢又贵，日常开发建议 high 或 low；Kimi K3 思考不可关闭故没有“关”档', 
 
         // ── 会话 ─────────────────────────────────────────
         'session.new':          '新建会话',
@@ -635,14 +632,11 @@ const 语言包 = {
         // ── Model switcher ─────────────────────────────
         'model.release_vram':   'Release VRAM',
         'model.release_vram_title': 'Unload the local model to free VRAM/RAM',
-        'model.reasoning':      'Reasoning',
-        'model.reasoning_default': 'Default',
-        'model.reasoning_title': 'Click to cycle reasoning effort: Default→low→high→max. Only models accepting reasoning_effort (Kimi K3, DeepSeek V4); max is deepest but slow and pricey — high or low is better for daily dev',
         'model.thinking':       'Thinking',
         'model.thinking_default': 'Default',
         'model.thinking_on':    'On',
         'model.thinking_off':   'Off',
-        'model.thinking_title': 'Click to cycle thinking mode: Default (no param)→On→Off. Sent as thinking.type for DeepSeek V4 and Kimi K2.6/K2.5, or enable_thinking for Qwen3; Kimi K3 always thinks and cannot be turned off. Off is faster and cheaper — keep it on for complex tasks', 
+        'model.thinking_title': 'Click to cycle thinking gears: Default→On→Off→low→high→max (gears vary by model capability). Default sends no param and follows the server; On/Off map to thinking.type (DeepSeek V4, Kimi K2.6/K2.5) or enable_thinking (Qwen3); low/high/max set reasoning_effort, supported only by Kimi K3 and DeepSeek V4 — max is deepest but slow and pricey, high or low is better for daily dev; Kimi K3 always thinks, so it has no Off gear', 
 
         // ── Session ──────────────────────────────────────
         'session.new':          'New Session',

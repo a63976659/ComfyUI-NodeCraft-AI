@@ -722,11 +722,10 @@ export function 模型MaxTokens上限(模型名) {
     return 命中 ? 命中[1] : 32768;
 }
 
-// ─── 思考模式（开关 + 深度，模型切换栏按钮共享）───────────────
+// ─── 思考模式（开关与深度合并为单按钮档位，模型切换栏共享）─────
 
-// 档位循环顺序（空串 = 不传参数，服务端取默认值）
-const 思考深度档位 = ["", "low", "high", "max"];
-const 思考模式档位 = ["", "on", "off"];
+// 属于"思考深度"的档位值（其余档位为开关档："" 默认 / on 开 / off 关）
+const 深度档位 = ["low", "high", "max"];
 
 // 思考能力表：与后端 API模型客户端._思考能力表 一一对应（按模型名前缀匹配，顺序敏感）
 // 开关：能否通过参数开/关思考；深度：能否传 reasoning_effort 调推理强度
@@ -751,14 +750,22 @@ function 思考能力(模型名) {
     return 命中 ? 命中[1] : 无思考能力;
 }
 
-// 是否支持 reasoning_effort 档位（K3 / DeepSeek V4）
-export function 支持思考深度(模型名) {
-    return 思考能力(模型名).深度;
-}
-
-// 是否支持思考开关（DeepSeek V4 / Kimi K2.6・K2.5 / 千问 Qwen3；K3始终思考无开关）
-export function 支持思考开关(模型名) {
-    return 思考能力(模型名).开关;
+/**
+ * 该模型可循环的思考档位（空数组 = 不支持思考参数，按钮隐藏）
+ *
+ * 思考开关与思考深度合并成一条档位链，同一模型只出现一个按钮：
+ *   "" 默认（不传参数跟随服务端）→ on 开 → off 关 → low → high → max
+ * 档位随模型能力增减：仅支持开关的只有 默认/开/关，仅支持深度的（Kimi K3
+ * 思考不可关闭）没有"关"档，从而不存在"关掉思考后深度按钮消失且无法恢复"的死角。
+ * @param {string} 模型名
+ * @returns {string[]} 档位循环顺序
+ */
+export function 思考档位表(模型名) {
+    const 能力 = 思考能力(模型名);
+    const 档位 = [""];
+    if (能力.开关) 档位.push("on", "off");
+    if (能力.深度) 档位.push(...深度档位);
+    return 档位.length > 1 ? 档位 : [];
 }
 
 // 读取当前激活 API 配置的某个思考字段（无激活配置时回退顶层设置）
@@ -769,54 +776,59 @@ function 读思考字段(字段名) {
 }
 
 /**
- * 循环切换激活 API 配置的某个思考字段（写入配置 + 顶层设置并持久化）
- * @param {string} 字段名 - reasoning_effort 或 thinking_mode
- * @param {string[]} 档位表 - 循环顺序
- * @returns {Promise<string>} 切换后的档位
+ * 当前思考档位（由 reasoning_effort + thinking_mode 两个存储字段还原）
+ *
+ * 深度值优先（深度档隐含思考开启）；两个字段都按模型能力过滤后再取值，
+ * 不属于该模型档位表的历史残值（如把配置模型改成 K3 后残留的 off）一律回落到
+ * 默认档，保证按钮始终可见且能循环回默认。
+ * @param {string} 模型名
+ * @returns {string} "" | "on" | "off" | "low" | "high" | "max"
  */
-async function 切换思考字段(字段名, 档位表) {
+export function 当前思考档位(模型名) {
+    const 能力 = 思考能力(模型名);
+    const 深度 = 能力.深度 ? 读思考字段("reasoning_effort") : "";
+    const 开关 = 能力.开关 ? 读思考字段("thinking_mode") : "";
+    const 值 = 深度 || 开关 || "";
+    return 思考档位表(模型名).includes(值) ? 值 : "";
+}
+
+/**
+ * 循环切换到下一个思考档位（一次请求同时持久化 thinking_mode + reasoning_effort）
+ *
+ * 选中深度档时把开关一并置为 on（仅支持开关的模型），避免后端因 off 丢弃
+ * reasoning_effort；选中开关档时清空深度，两个字段始终保持自洽。
+ * @param {string} 模型名
+ * @returns {Promise<string>} 切换后的档位（"" = 默认不传参数）
+ */
+export async function 切换思考档位(模型名) {
+    const 档位表 = 思考档位表(模型名);
+    if (档位表.length === 0) return "";
+    const 下一个 = 档位表[(档位表.indexOf(当前思考档位(模型名)) + 1) % 档位表.length];
+    const 是深度档 = 深度档位.includes(下一个);
+    const 新深度 = 是深度档 ? 下一个 : "";
+    const 新开关 = 是深度档
+        ? (思考能力(模型名).开关 ? "on" : "")
+        : 下一个;
     const 列表 = Array.isArray(状态.设置.api_profiles) ? 状态.设置.api_profiles : [];
     const 配置 = 列表.find((p) => p && p.id === 状态.设置.active_api_profile_id);
-    const 当前 = (配置 ? 配置[字段名] : 状态.设置[字段名]) || "";
-    const 下一个 = 档位表[(档位表.indexOf(当前) + 1) % 档位表.length];
-    if (配置) 配置[字段名] = 下一个 || null;
-    状态.设置[字段名] = 下一个;
+    if (配置) {
+        配置.reasoning_effort = 新深度 || null;
+        配置.thinking_mode = 新开关 || null;
+    }
+    状态.设置.reasoning_effort = 新深度;
+    状态.设置.thinking_mode = 新开关;
     try {
-        await 请求("POST", "/settings", { [字段名]: 下一个, api_profiles: 状态.设置.api_profiles });
+        await 请求("POST", "/settings", {
+            reasoning_effort: 新深度,
+            thinking_mode: 新开关,
+            api_profiles: 状态.设置.api_profiles,
+        });
         事件总线.emit(事件.设置已保存, 状态.设置);
     } catch (e) {
-        console.error(`[节点梦工厂] 切换 ${字段名} 失败:`, e);
+        console.error("[节点梦工厂] 切换思考档位失败:", e);
         Toast.error(`切换失败: ${e.message || e}`);
     }
     return 下一个;
-}
-
-// 读取当前激活 API 配置的思考深度（无激活配置时回退顶层设置）
-export function 当前思考深度() {
-    return 读思考字段("reasoning_effort");
-}
-
-// 读取当前激活 API 配置的思考开关状态（"" | "on" | "off"）
-export function 当前思考模式() {
-    return 读思考字段("thinking_mode");
-}
-
-/**
- * 循环切换激活 API 配置的思考深度（默认→low→high→max→默认）
- * 同步顶层 reasoning_effort 并持久化；模型切换栏的思考深度按钮共用。
- * @returns {Promise<string>} 切换后的档位（空串 = 默认不传）
- */
-export async function 切换思考深度() {
-    return 切换思考字段("reasoning_effort", 思考深度档位);
-}
-
-/**
- * 循环切换激活 API 配置的思考开关（默认→开→关→默认）
- * 后端按供应商转成 thinking.type（DeepSeek/Kimi K2.x）或 enable_thinking（千问）。
- * @returns {Promise<string>} 切换后的状态（"" = 不传参数，跟随服务端默认）
- */
-export async function 切换思考模式() {
-    return 切换思考字段("thinking_mode", 思考模式档位);
 }
 
 /**
