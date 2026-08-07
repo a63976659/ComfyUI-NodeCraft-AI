@@ -159,6 +159,68 @@ def _是否合理重复(tool_name: str, tool_args: dict, 已修改文件集: set
     return False
 
 
+# ===== 同文件累计读取配额（坑 98 同源：压缩失忆→重复重读）=====
+# args_hash 去重只能识别「完全相同参数」，模型换个行号区间就能绕过（实测
+# 单个 1006 行文件被分段重读 72 次，而 args_hash 重复率仅 10%）。故补一道
+# 按文件路径（忽略行号）的累计配额，参考 Claude Code 的 Read 文件跟踪与
+# Cline 的 FileContextTracker：按路径而非参数追踪，文件被写入后重置。
+_文件读取软上限 = 8   # 达到后注入警告 + 已读区间清单，仍执行
+_文件读取硬上限 = 12  # 达到后拒绝执行，只回已读区间清单与改用 search 的指引
+
+
+def _记录文件读取(文件读取计数: dict, file_path: str, tool_args: dict):
+    """记录一次成功的文件读取（按路径累计次数，并另存已读行区间用于提示）"""
+    if not file_path:
+        return
+    记录 = 文件读取计数.setdefault(file_path, {"次数": 0, "区间": []})
+    记录["次数"] += 1
+    起 = tool_args.get("start_line")
+    止 = tool_args.get("end_line")
+    区间 = f"{起 or 1}-{止}" if (起 or 止) else "全文"
+    if 区间 not in 记录["区间"]:
+        记录["区间"].append(区间)
+
+
+def _文件读取配额检查(tool_name: str, tool_args: dict,
+                    文件读取计数: dict, 已修改文件集: set) -> tuple:
+    """检查同一文件的累计读取次数是否超配额（忽略行号差异）
+
+    只约束 read_plugin_file：search_plugin_file 属探索行为、结果体积小，
+    纳入硬拦截容易误伤正常的关键字定位。
+
+    Returns:
+        (处置, 提示文本)，处置 ∈ {"放行", "警告", "拒绝"}
+        - 放行：正常执行
+        - 警告：注入提示后仍执行
+        - 拒绝：不执行，直接把提示作为工具结果回给模型
+    """
+    if tool_name != "read_plugin_file":
+        return "放行", ""
+    file_path = tool_args.get("file_path", "")
+    # 文件刚被 write/edit 改过 → 重读合理（与 _是否合理重复 同语义）
+    if not file_path or file_path in 已修改文件集:
+        return "放行", ""
+    记录 = 文件读取计数.get(file_path)
+    if not 记录 or 记录["次数"] < _文件读取软上限:
+        return "放行", ""
+
+    次数 = 记录["次数"]
+    已读区间 = "、".join(记录["区间"][:20])
+    if 次数 >= _文件读取硬上限:
+        return "拒绝", (
+            f"[系统拦截] 文件 {file_path} 本次任务内已读取 {次数} 次，"
+            f"已覆盖区间：{已读区间}。为避免重复空转，本次读取未执行。\n"
+            f"请基于上文已获取的内容继续推进；若确实缺少某段内容，"
+            f"请改用 search_plugin_file 用关键字精确检索，"
+            f"而不是继续分段重读整个文件。"
+        )
+    return "警告", (
+        f"[系统提示] 文件 {file_path} 本次任务内已读取 {次数} 次，"
+        f"已覆盖区间：{已读区间}。若所需内容已在上文，请勿继续重读；"
+        f"达到 {_文件读取硬上限} 次后将被系统拦截。"
+    )
+
+
 def _处理工具错误(错误恢复器, error_msg, info, 工具重试计数, 工具名重试计数, max_retries,
                 工具错误类型计数=None, pitfall_threshold=2, max_same_tool_failures=5):
     """统一工具错误处理：分析错误原因、追踪重试次数、检测重复失败死循环。

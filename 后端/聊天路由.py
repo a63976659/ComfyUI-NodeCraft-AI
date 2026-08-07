@@ -39,6 +39,7 @@ from .聊天上下文 import (
 )
 from .文件读写操作 import save_session
 from .日志配置 import 获取日志器
+from .详细日志 import 记录AI输出, 记录工具调用, 记录用户输入
 from .系统环境映射 import get_default_llm_path
 from .路由公共 import (
     _agent_available,
@@ -163,10 +164,15 @@ def _build_tool_executor(plugin_path, tool_tracker: list = None, active_tab: str
     async def _tool_executor(tool_name: str, tool_args: dict) -> str:
         if tool_tracker is not None:
             tool_tracker.append(tool_name)
+        _工具开始 = time.time()
         try:
-            return await _执行工具(tool_name, tool_args, plugin_path_str)
+            _结果 = await _执行工具(tool_name, tool_args, plugin_path_str)
+            记录工具调用(tool_name, tool_args, _结果, 耗时秒=time.time() - _工具开始)
+            return _结果
         except Exception as ex:
-            return f"[工具执行异常]: {type(ex).__name__}: {ex}"
+            _错误文本 = f"[工具执行异常]: {type(ex).__name__}: {ex}"
+            记录工具调用(tool_name, tool_args, _错误文本, 耗时秒=time.time() - _工具开始, 是否异常=True)
+            return _错误文本
 
     return file_tools, _tool_executor
 
@@ -221,6 +227,11 @@ async def _解析聊天请求(request, 错误400=_json错误):
     附件类型错误 = await _检查附件类型(payload["attachments"])
     if 附件类型错误:
         return None, 附件类型错误
+    # 详细日志：记录用户输入与上传附件（不阻断请求，失败仅降级）
+    try:
+        记录用户输入(payload["session_id"], active_tab, payload["user_message"], payload["attachments"])
+    except Exception as _日志err:
+        logger.debug(f"详细日志记录失败（忽略）: {_日志err}")
     return payload, None
 
 
@@ -451,6 +462,13 @@ async def handle_chat(request):
         # 记录模型推理指标
         try:
             _metrics_collector.record_inference((time.time() - _start) * 1000, _提取推理token数(model_source))
+        except Exception:
+            pass
+
+        # 详细日志：记录 AI 完整输出
+        try:
+            记录AI输出(session_id, reply_content, 耗时秒=time.time() - _start,
+                       token数=_提取推理token数(model_source), 渠道="非流式")
         except Exception:
             pass
 
@@ -718,6 +736,12 @@ async def handle_chat_stream(request):
             # 将 AI 回复存入会话并异步提取记忆
             if full_reply:
                 clean_reply = re.sub(r'<thinking>[\s\S]*?</thinking>', '', full_reply).strip()
+                # 详细日志：记录 AI 完整输出
+                try:
+                    记录AI输出(session_id, clean_reply, 耗时秒=time.time() - _start,
+                               token数=_提取推理token数(model_source))
+                except Exception:
+                    pass
                 await _保存回复并提取记忆(
                     session_id, session_data, clean_reply, user_message,
                     plugin_path, _tool_call_sequence, 任务名="跨会话记忆提取(流式)",

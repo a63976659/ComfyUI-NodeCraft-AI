@@ -19,6 +19,7 @@ from .会话缓存 import 会话缓存
 from .并发控制 import _递增会话版本
 from .文件读写操作 import save_session
 from .日志配置 import 获取日志器
+from .详细日志 import 记录AI输出, 记录用户输入
 from .系统环境映射 import get_default_llm_path
 from .聊天路由 import _build_chat_context, _build_tool_executor, _创建后台任务, _带首块心跳
 from .路由公共 import (
@@ -195,9 +196,15 @@ async def _handle_ws_chat(ws, request, session_id, message, data=None):
         await ws.send_json({"type": "error", "message": "缺少 session_id"})
         return
 
+    _ws_start = time.time()
     try:
         # 复用公共上下文构建
         active_tab = data.get("active_tab", "develop")
+        # 详细日志：记录用户输入与上传附件（不阻断请求，失败仅降级）
+        try:
+            记录用户输入(session_id, active_tab, message, data.get("attachments", []), 渠道="WebSocket")
+        except Exception as _日志err:
+            logger.debug(f"详细日志记录失败（忽略）: {_日志err}")
         ctx = await _build_chat_context(
             request, session_id, message,
             attachments=data.get("attachments", []),
@@ -327,6 +334,11 @@ async def _handle_ws_chat(ws, request, session_id, message, data=None):
         if full_reply:
             import re
             clean_reply = re.sub(r'<thinking>[\s\S]*?</thinking>', '', full_reply).strip()
+            # 详细日志：记录 AI 完整输出
+            try:
+                记录AI输出(session_id, clean_reply, 耗时秒=time.time() - _ws_start, 渠道="WebSocket")
+            except Exception:
+                pass
             ai_now = datetime.now().isoformat(timespec="seconds")
             ai_msg = {"role": "assistant", "content": clean_reply, "timestamp": ai_now}
             session_data["messages"].append(ai_msg)

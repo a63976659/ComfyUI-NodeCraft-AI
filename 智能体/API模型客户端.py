@@ -35,6 +35,8 @@ from 智能体.模型客户端工具 import (  # noqa: F401  re-export 兼容
     _免去重工具集,
     _是否合理重复,
     _处理工具错误,
+    _记录文件读取,
+    _文件读取配额检查,
 )
 from 智能体.模型能力注册表 import 模型能力注册表
 from 智能体.错误恢复器 import 错误恢复器
@@ -233,12 +235,51 @@ class AICoderClient:
         """
         return (model_name or "").lower().startswith("kimi-")
 
+    # ===== 思考模式能力表（各供应商协议不同，按模型名前缀匹配，顺序敏感）=====
+    # 开关: None = 无开关（始终思考，传开关参数会报错）
+    #       "thinking"        = {"thinking": {"type": "enabled"/"disabled"}}
+    #       "enable_thinking" = {"enable_thinking": true/false}（通义千问混合思考，非 OpenAI 标准字段）
+    # 深度: 是否支持 reasoning_effort（low/high/max）
+    # 回传: 工具循环中是否需原样回传 assistant 消息里的 reasoning_content
+    #       （不需要的供应商回传会报 400）
+    _思考能力表 = (
+        # Kimi K3：始终思考 + 保留式思考始终开启，不应传 thinking；仅顶层 reasoning_effort（默认 max）
+        ("kimi-k3", {"开关": None, "深度": True, "回传": True}),
+        # Kimi K2.7-code：始终思考，传 disabled 报错；不支持 reasoning_effort
+        ("kimi-k2.7", {"开关": None, "深度": False, "回传": True}),
+        # Kimi K2.6 / K2.5：默认开启思考，可用 thinking.type 关闭；不支持 reasoning_effort
+        ("kimi-k2.6", {"开关": "thinking", "深度": False, "回传": True}),
+        ("kimi-k2.5", {"开关": "thinking", "深度": False, "回传": True}),
+        # 其余 kimi 系列：保守处理（不传开关/深度参数），但沿用 Kimi 的 reasoning_content 回传要求
+        ("kimi-", {"开关": None, "深度": False, "回传": True}),
+        # DeepSeek V4 pro/flash：thinking.type 开关（默认 enabled）+ reasoning_effort（默认 high）。
+        # 官方明确：携带 tools 的请求，后续请求必须完整回传 reasoning_content，否则报 400
+        ("deepseek-v4", {"开关": "thinking", "深度": True, "回传": True}),
+        # DeepSeek reasoner（R1 系）：思考不可关闭，且回传 reasoning_content 会报 400
+        ("deepseek-reasoner", {"开关": None, "深度": False, "回传": False}),
+        # 通义千问 Qwen3 系列（含 Qwen3.8-Max）：混合思考，enable_thinking 开关（百炼侧默认开启）；
+        # 多轮对话不需要回传 reasoning_content
+        ("qwen3", {"开关": "enable_thinking", "深度": False, "回传": False}),
+        ("qwen-plus", {"开关": "enable_thinking", "深度": False, "回传": False}),
+        ("qwen-turbo", {"开关": "enable_thinking", "深度": False, "回传": False}),
+        ("qwen-flash", {"开关": "enable_thinking", "深度": False, "回传": False}),
+    )
+    _无思考能力 = {"开关": None, "深度": False, "回传": False}
+
+    def _思考能力(self, model_name: str) -> dict:
+        """查询模型的思考模式能力（开关风格 / 是否支持深度 / 是否需回传 reasoning_content）"""
+        名 = (model_name or "").lower()
+        for 前缀, 能力 in self._思考能力表:
+            if 名.startswith(前缀):
+                return 能力
+        return self._无思考能力
+
     def _支持思考参数(self, model_name: str) -> bool:
-        """检测模型是否使用 Kimi K系列思考协议
-        请求可传 reasoning_effort 调节思考深度；工具循环需原样回传
-        assistant 消息中的 reasoning_content（其他供应商回传会报 400）。
+        """工具循环中是否需要原样回传 assistant 消息里的 reasoning_content
+        Kimi K系列与 DeepSeek V4 的思考协议要求完整回传，否则 API 报 400；
+        其他供应商（通义千问、DeepSeek reasoner 等）回传反而会报错。
         """
-        return (model_name or "").lower().startswith("kimi-")
+        return bool(self._思考能力(model_name).get("回传"))
 
     def _max_tokens参数名(self, model_name: str) -> str:
         """输出长度参数的字段名
@@ -477,10 +518,19 @@ class AICoderClient:
             payload["stream_options"] = {"include_usage": True}
         if not self._temperature固定(model_name):
             payload["temperature"] = temperature
-        # K3 思考深度（low/high/max，不传时服务端默认 max），仅 kimi 系列支持该参数
+        _思考 = self._思考能力(model_name)
+        _thinking_mode = str(settings.get("thinking_mode") or "").strip().lower()
+        # 思考深度（low/high/max，不传时由服务端取默认值），仅 K3 / DeepSeek V4 支持该参数；
+        # 思考已显式关闭时不再传深度（该参数只在思考模式下有意义）
         _reasoning_effort = str(settings.get("reasoning_effort") or "").strip()
-        if _reasoning_effort and self._支持思考参数(model_name):
+        if _reasoning_effort and _思考.get("深度") and _thinking_mode != "off":
             payload["reasoning_effort"] = _reasoning_effort
+        # 思考模式开关（空 = 不传参数走服务端默认；on/off = 显式开关），各供应商字段风格不同
+        if _thinking_mode in ("on", "off") and _思考.get("开关"):
+            if _思考["开关"] == "thinking":
+                payload["thinking"] = {"type": "enabled" if _thinking_mode == "on" else "disabled"}
+            else:  # enable_thinking（通义千问混合思考）
+                payload["enable_thinking"] = (_thinking_mode == "on")
         if tools_payload and not 工具不支持降级:
             payload["tools"] = tools_payload
 
@@ -488,8 +538,12 @@ class AICoderClient:
         self._校验消息配对(messages)
         return payload
 
-    def _工具去重检测(self, _tc_infos, _工具执行历史, _已修改文件集, tool_executor, 流式=False):
+    def _工具去重检测(self, _tc_infos, _工具执行历史, _已修改文件集, tool_executor, 流式=False,
+                    _文件读取计数=None):
         """工具执行成功去重检测（非流式/流式共用，流式时提示/日志更详细）。
+
+        除 args_hash 精确去重外，另按文件路径做累计读取配额检查（坑 98 同源），
+        拦截「换行号区间反复重读同一文件」这类 hash 认不出的空转。
 
         返回 (_async_tasks, _去重结果, _去重提示, _同轮重复, _本轮结果缓存)。
         """
@@ -568,6 +622,21 @@ class AICoderClient:
                         logger.warning(f"[工具去重] 第1次重复提示: {tool_name}")
                     _去重提示[idx] = 提示消息
 
+            # ===== 同文件累计读取配额（忽略行号差异，坑 98 同源）=====
+            if _文件读取计数 is not None:
+                _处置, _配额提示 = _文件读取配额检查(
+                    tool_name, tool_args, _文件读取计数, _已修改文件集
+                )
+                if _处置 == "拒绝":
+                    _去重结果[idx] = _配额提示
+                    logger.warning(f"[读取配额] 拦截 {tool_name} {tool_args.get('file_path', '')}")
+                    continue
+                if _处置 == "警告":
+                    _去重提示[idx] = (
+                        f"{_去重提示[idx]}\n{_配额提示}" if idx in _去重提示 else _配额提示
+                    )
+                    logger.warning(f"[读取配额] 警告 {tool_name} {tool_args.get('file_path', '')}")
+
             # 需要实际执行
             _去重结果[idx] = None
             if 流式:
@@ -582,7 +651,8 @@ class AICoderClient:
                     _去重提示: dict, _工具重试计数: dict, _工具名重试计数: dict,
                     _工具错误类型计数: dict, _工具执行历史: dict,
                     _已修改文件集: set, _进度修改文件: set, _进度工具统计: dict,
-                    _已读文件清单: set, _任务计划容器: dict, 工具轮次: int):
+                    _已读文件清单: set, _任务计划容器: dict, 工具轮次: int,
+                    _文件读取计数: dict = None):
         """P2-11 共享装配：按顺序装配工具执行结果并追加 tool 消息（非流式/流式共用）。
 
         含错误恢复、重复失败熔断检测、执行历史记录、写后提示、结果摘要化。
@@ -669,6 +739,9 @@ class AICoderClient:
                             _已修改文件集.discard(file_path)
                             if file_path:
                                 _已读文件清单.add(file_path)
+                            # 按路径累计读取次数与已读区间（累计读取配额控制用）
+                            if _文件读取计数 is not None:
+                                _记录文件读取(_文件读取计数, file_path, tool_args)
             else:
                 result_str = "[错误] 工具执行结果丢失"
 
@@ -901,6 +974,7 @@ class AICoderClient:
         _进度工具统计 = {}     # 工具名 → 成功执行次数（轮次上限时的进度摘要用）
         _进度修改文件 = set()  # 只增不减（区别于 _已修改文件集的 read 后 discard 去重语义）
         _已读文件清单 = set()  # read 成功记录，只增不减（P2-12 操作台账用）
+        _文件读取计数 = {}     # 文件路径 → {"次数", "区间"}（累计读取配额用）
         _任务计划容器 = {}     # update_plan 最新清单文本（台账保活用）
         _熔断中断 = False      # 同一工具连续失败达上限时置位，中断循环
         _熔断工具名 = ""
@@ -1032,7 +1106,7 @@ class AICoderClient:
                     "content": content,
                     "tool_calls": tool_calls,
                 }
-                # Kimi 官方要求：工具循环原样回传完整 assistant 消息（含 reasoning_content）
+                # Kimi/DeepSeek 官方要求：工具循环原样回传完整 assistant 消息（含 reasoning_content）
                 if message.get("reasoning_content") and self._支持思考参数(model_name):
                     _assistant_msg["reasoning_content"] = message["reasoning_content"]
                 complete_messages.append(_assistant_msg)
@@ -1043,6 +1117,7 @@ class AICoderClient:
                 (_async_tasks, _去重结果, _去重提示,
                  _同轮重复, _本轮结果缓存) = self._工具去重检测(
                     _tc_infos, _工具执行历史, _已修改文件集, tool_executor,
+                    _文件读取计数=_文件读取计数,
                 )
 
                 # 并行等待所有实际执行的结果
@@ -1053,7 +1128,8 @@ class AICoderClient:
                     complete_messages, _tc_infos, _去重结果, _同轮重复, _本轮结果缓存,
                     _执行结果映射, _去重提示, _工具重试计数, _工具名重试计数,
                     _工具错误类型计数, _工具执行历史, _已修改文件集, _进度修改文件,
-                    _进度工具统计, _已读文件清单, _任务计划容器, 工具轮次
+                    _进度工具统计, _已读文件清单, _任务计划容器, 工具轮次,
+                    _文件读取计数
                 )
                 # 熔断：同一工具连续失败达上限 → 中断循环，避免无限重试烧 token
                 if _熔断中断:
@@ -1294,6 +1370,7 @@ class AICoderClient:
         _进度工具统计 = {}     # 工具名 → 成功执行次数（轮次上限时的进度摘要用）
         _进度修改文件 = set()  # 只增不减（区别于 _已修改文件集的 read 后 discard 去重语义）
         _已读文件清单 = set()  # read 成功记录，只增不减（P2-12 操作台账用）
+        _文件读取计数 = {}     # 文件路径 → {"次数", "区间"}（累计读取配额用）
         _任务计划容器 = {}     # update_plan 最新清单文本（台账保活用）
         _截断续写次数 = 0      # token截断重试（finish_reason=="length"）
         _纯文本重提次数 = 0    # 模型输出文字不调工具时的强制重提
@@ -1545,7 +1622,7 @@ class AICoderClient:
                     "content": assistant_content_buffer,
                     "tool_calls": tool_calls_list,
                 }
-                # Kimi 官方要求：工具循环原样回传完整 assistant 消息（含 reasoning_content），不能只留 content
+                # Kimi/DeepSeek 官方要求：工具循环原样回传完整 assistant 消息（含 reasoning_content），不能只留 content
                 if reasoning_content_buffer and self._支持思考参数(model_name):
                     _assistant_msg["reasoning_content"] = reasoning_content_buffer
                 prepared_messages.append(_assistant_msg)
@@ -1556,6 +1633,7 @@ class AICoderClient:
                 (_async_tasks, _去重结果, _去重提示,
                  _同轮重复, _本轮结果缓存) = self._工具去重检测(
                     _tc_infos, _工具执行历史, _已修改文件集, tool_executor, 流式=True,
+                    _文件读取计数=_文件读取计数,
                 )
 
                 # 推送工具执行进度（仅推送需要实际执行的，同轮重复调用不推送）
@@ -1571,7 +1649,8 @@ class AICoderClient:
                     prepared_messages, _tc_infos, _去重结果, _同轮重复, _本轮结果缓存,
                     _执行结果映射, _去重提示, _工具重试计数, _工具名重试计数,
                     _工具错误类型计数, _工具执行历史, _已修改文件集, _进度修改文件,
-                    _进度工具统计, _已读文件清单, _任务计划容器, 工具轮次
+                    _进度工具统计, _已读文件清单, _任务计划容器, 工具轮次,
+                    _文件读取计数
                 )
                 # 熔断：同一工具连续失败达上限 → 中断循环，避免无限重试烧 token
                 if _熔断中断:
