@@ -28,7 +28,7 @@ import { 创建会话列表面板 } from "./会话列表面板.js";
 import { t, 监听语言切换, 获取当前语言, 切换语言 } from "./i18n.js";
 
 // 版本信标：浏览器端读 window.__NCA_VIEW_BUILD 即可确定执行的是否为最新模块
-window.__NCA_VIEW_BUILD = "r9-20260807-1000";
+window.__NCA_VIEW_BUILD = "r10-20260807-1500";
 
 // 语言切换监听器取消句柄（跨序于 renderSidebarUI 多次调用，需在重渲染前取消以避免重复注册）
 let _unsubLang = null;
@@ -340,15 +340,17 @@ export function renderSidebarUI(container) {
 
     function 渲染顶部品牌栏() {
         // 语言切换按钮（低调小字按钮，紧贴品牌名右侧）
+        // 按钮显示“目标语言”：中文界面显示 en、英文界面显示 中文，
+        // 保证任何语言下用户都能找到唯一认识的文字（MDN/Wikipedia 同款模式）
         const langBtn = el("button", {
             class: "nca-lang-btn",
             title: "切换语言 / Toggle Language",
-            text: 获取当前语言() === 'zh-CN' ? 'cn' : 'en',
+            text: 获取当前语言() === 'zh-CN' ? 'en' : '中文',
         });
         langBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             const next = 切换语言();
-            langBtn.textContent = next === 'zh-CN' ? 'cn' : 'en';
+            langBtn.textContent = next === 'zh-CN' ? 'en' : '中文';
         });
 
         const brand = el("div", { class: "nca-header-brand" }, [
