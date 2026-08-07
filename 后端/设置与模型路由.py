@@ -396,10 +396,13 @@ async def handle_clear_memories(request):
         if (data or {}).get("type") == "item":
             index = (data or {}).get("index")
             记忆类型 = (data or {}).get("记忆类型") or (data or {}).get("category")
-            if index is None or 记忆类型 is None:
+            # "plugin" 类型删除整个插件记忆节点，不需要 index
+            if 记忆类型 != "plugin" and index is None:
+                return _error_response("删除单条记忆需要 index 和 记忆类型 参数", 400)
+            if 记忆类型 is None:
                 return _error_response("删除单条记忆需要 index 和 记忆类型 参数", 400)
             try:
-                index = int(index)
+                index = int(index) if index is not None else -1
             except (TypeError, ValueError):
                 return _error_response("index 必须为整数", 400)
             success = await asyncio.to_thread(
