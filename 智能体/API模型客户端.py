@@ -521,9 +521,11 @@ class AICoderClient:
         _思考 = self._思考能力(model_name)
         _thinking_mode = str(settings.get("thinking_mode") or "").strip().lower()
         # 思考深度（low/high/max，不传时由服务端取默认值），仅 K3 / DeepSeek V4 支持该参数；
-        # 思考已显式关闭时不再传深度（该参数只在思考模式下有意义）
+        # 仅当模型真的有思考开关且被显式关闭时才不传深度（该参数只在思考模式下有意义）。
+        # K3 这类思考不可关闭的模型（开关=None）不能被配置里残留的 off 静默吞掉 reasoning_effort
         _reasoning_effort = str(settings.get("reasoning_effort") or "").strip()
-        if _reasoning_effort and _思考.get("深度") and _thinking_mode != "off":
+        _显式关思考 = bool(_思考.get("开关")) and _thinking_mode == "off"
+        if _reasoning_effort and _思考.get("深度") and not _显式关思考:
             payload["reasoning_effort"] = _reasoning_effort
         # 思考模式开关（空 = 不传参数走服务端默认；on/off = 显式开关），各供应商字段风格不同
         if _thinking_mode in ("on", "off") and _思考.get("开关"):
