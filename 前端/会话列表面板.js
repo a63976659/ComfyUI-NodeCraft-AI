@@ -9,7 +9,7 @@
 //   - 仅 type==='develop' 显示"删除会话和文件夹"双选项，其他类型仅普通删除。
 // ═══════════════════════════════════════════════════════════════
 
-import { el, Toast, NCA_STORAGE_KEYS } from "./工具函数.js";
+import { el, Toast, 插件存储键 } from "./工具函数.js";
 import { t } from "./i18n.js";
 import {
     获取会话列表, 创建会话, 删除会话, 更新会话标题, 格式化时间,
@@ -285,8 +285,10 @@ export function 创建会话列表面板(options = {}) {
     // ─── 操作：新建 / 切换 / 删除 / 重命名 ────────────────────
     async function _新建会话() {
         // optimize / visualize 类型：必须先选择插件文件夹才能新建
+        // 按 scope 读取本界面独立的存储键（三面板文件夹选择隔离），
+        // 不能读 develop 的 NCA_STORAGE_KEYS.plugin，否则会串用开发界面的选择
         if (type === "optimize" || type === "visualize") {
-            const 选中文件夹 = (localStorage.getItem(NCA_STORAGE_KEYS.plugin) || "").trim();
+            const 选中文件夹 = (localStorage.getItem(插件存储键(type)) || "").trim();
             if (!选中文件夹) {
                 Toast.warning("请选择文件夹");
                 return;
