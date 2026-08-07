@@ -844,7 +844,10 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
                     const 信息 = pm["项目信息"] || {};
                     const 上下文列表 = pm["上下文"] || [];
                     html += `<div style="padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05);">
-                        <div style="color:var(--nca-fg); font-size:11px; font-weight:600;">📦 ${_转义HTML(插件名)}</div>`;
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="color:var(--nca-fg); font-size:11px; font-weight:600;">📦 ${_转义HTML(插件名)}</span>
+                            <button class="nca-memory-del-btn" data-type="plugin" data-plugin="${_转义HTML(插件名)}" title="${t('settings.memory_plugin_delete')}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:11px; padding:2px 6px; flex-shrink:0;">✕</button>
+                        </div>`;
                     if (信息["技术栈"] && 信息["技术栈"].length > 0) {
                         html += `<div style="color:var(--nca-fg-dim); font-size:10px; margin-top:2px;">${t('settings.memory_tech_stack', { stack: _转义HTML(信息["技术栈"].join(', ')) })}</div>`;
                     }
@@ -883,9 +886,15 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
                     const type = btn.dataset.type;
                     const index = parseInt(btn.dataset.index);
                     const plugin = btn.dataset.plugin || null;
-                    if (!confirm(t('settings.memory_confirm_delete'))) return;
+                    // 删除整个插件记忆需单独确认文案（会连带删除全部上下文）
+                    const 确认文案 = type === 'plugin'
+                        ? t('settings.memory_confirm_delete_plugin', { name: plugin })
+                        : t('settings.memory_confirm_delete');
+                    if (!confirm(确认文案)) return;
                     try {
-                        const rj = await 请求('DELETE', '/memories', { type: 'item', 记忆类型: type, index, plugin_path: plugin });
+                        const body = { type: 'item', 记忆类型: type, plugin_path: plugin };
+                        if (type !== 'plugin') body.index = index;
+                        const rj = await 请求('DELETE', '/memories', body);
                         if (rj.success) {
                             加载记忆数据(panelRef);
                             Toast && Toast.show && Toast.show(t('settings.memory_deleted'), 'success');

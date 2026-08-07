@@ -28,7 +28,7 @@ import { 创建会话列表面板 } from "./会话列表面板.js";
 import { t, 监听语言切换, 获取当前语言, 切换语言 } from "./i18n.js";
 
 // 版本信标：浏览器端读 window.__NCA_VIEW_BUILD 即可确定执行的是否为最新模块
-window.__NCA_VIEW_BUILD = "r8-20260725-1810";
+window.__NCA_VIEW_BUILD = "r9-20260807-1000";
 
 // 语言切换监听器取消句柄（跨序于 renderSidebarUI 多次调用，需在重渲染前取消以避免重复注册）
 let _unsubLang = null;
@@ -363,16 +363,74 @@ export function renderSidebarUI(container) {
             brand,
             el("div", { class: "nca-header-actions" }, [
                 (() => {
-                    const 初始 = 获取主题();
+                    const 初始主题 = 获取主题();
+                    const 太阳El = el("span", { class: "nca-celestial nca-sun", text: "☀" });
+                    const 月亮El = el("span", { class: "nca-celestial nca-moon", text: "☾" });
                     const btn = el("button", {
                         class: "nca-icon-btn theme-btn",
-                        title: 初始 === 'light' ? t("header.theme_to_dark") : t("header.theme_to_light"),
-                        html: 初始 === 'light' ? "☾" : "☀",
+                        title: 初始主题 === 'light' ? t("header.theme_to_dark") : t("header.theme_to_light"),
                     });
-                    btn.addEventListener("click", async () => {
+                    btn.appendChild(el("span", { class: "nca-theme-stage" }, [太阳El, 月亮El]));
+
+                    // ── 日月交替动画（天体弧线交换参考 Jhey Tompkins 的 sun/moon toggle 模式）──
+                    // 进度 p∈[0,1]：0=静止（当前主题天体居中）；0.5=悬停预览（两天体各占一半）；
+                    // 1=完整交替（此时才真正切换主题）。弧线用极坐标驱动：
+                    // 出场天体 θ: 0°→+100°（向右落下），入场天体 θ: -100°→0°（从左升起）。
+                    const ARC_R = 10;          // 弧线半径 px（30px 按钮内保证悬停态两天体各占一半）
+                    const ARC_FLAT = 0.45;     // 垂直压扁系数（模拟地平线弧）
+                    const ARC_MAX_DEG = 100;   // 天体交换最大角度
+                    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+                    // 离场 = 当前主题天体（静止时居中），入场 = 另一天体；切换完成后角色互换
+                    let 离场El = 初始主题 === 'light' ? 太阳El : 月亮El;
+                    let 入场El = 初始主题 === 'light' ? 月亮El : 太阳El;
+                    let 当前p = 0, 目标p = 0, rafId = null, 正在切换 = false;
+                    let 悬停抑制 = false, 指针在内 = false, 上一帧时刻 = 0;
+
+                    const clamp01 = v => Math.min(1, Math.max(0, v));
+                    function place(elm, deg, op, sc) {
+                        const rad = deg * Math.PI / 180;
+                        const x = ARC_R * Math.sin(rad);
+                        const y = ARC_R * ARC_FLAT * (1 - Math.cos(rad));
+                        elm.style.transform = `translate(-50%, -50%) translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) scale(${sc.toFixed(3)})`;
+                        elm.style.opacity = op.toFixed(3);
+                    }
+                    function render(p) {
+                        // 离场：40% 进度后逐渐隐去；入场：60% 进度前完全浮现；缩放同步增减
+                        place(离场El, ARC_MAX_DEG * p, clamp01(1 - (p - 0.4) / 0.55), 1 - 0.25 * p);
+                        place(入场El, -ARC_MAX_DEG * (1 - p), clamp01((p - 0.05) / 0.55), 0.75 + 0.25 * p);
+                    }
+                    function tick(now) {
+                        rafId = null;
+                        if (!btn.isConnected) return;   // 按钮已被重渲染移除，停止动画
+                        const dt = 上一帧时刻 ? Math.min(now - 上一帧时刻, 50) : 16;
+                        上一帧时刻 = now;
+                        // 指数收敛逼近目标：等效 ease-out，且天然可打断（悬停中途点击/移开都平滑）
+                        当前p += (目标p - 当前p) * Math.min(1, dt / 100);
+                        if (Math.abs(目标p - 当前p) < 0.002) 当前p = 目标p;
+                        render(当前p);
+                        if (当前p !== 目标p) { rafId = requestAnimationFrame(tick); return; }
+                        上一帧时刻 = 0;
+                        if (正在切换 && 目标p === 1) 完成切换();
+                    }
+                    function 前往(p) {
+                        目标p = p;
+                        if (rafId === null) { 上一帧时刻 = 0; rafId = requestAnimationFrame(tick); }
+                    }
+                    async function 完成切换() {
+                        正在切换 = false;
                         const next = 切换主题(container);
-                        btn.innerHTML = next === 'light' ? "☾" : "☀";
+                        // 角色互换：入场天体成为新主场天体，p=0 重置与 p=1 终态位置重合，无缝衔接
+                        [离场El, 入场El] = [入场El, 离场El];
+                        当前p = 0;
+                        render(0);
                         btn.title = next === 'light' ? t("header.theme_to_dark") : t("header.theme_to_light");
+                        // 目标p 归零保持状态机干净（当前p 已重置为 0）
+                        目标p = 0;
+                        // 仅当指针仍在按钮内时才抑制悬停预览（避免刚切完立即重播）；
+                        // 动画期间指针已离开时不能置 true，否则 pointerleave 不会再触发，
+                        // 悬停抑制无法解除，导致下次移入时预览失效
+                        悬停抑制 = 指针在内;
                         // 主题切换后重建 3D 图形（画布颜色在创建时确定，CSS 变量无法驱动 WebGL）
                         // 防护：重建失败仅告警，不影响主题切换本身
                         try {
@@ -387,6 +445,24 @@ export function renderSidebarUI(container) {
                         } catch (err) {
                             console.warn('[节点梦工厂] 主题切换后重建 3D 图形失败（不影响主题生效）:', err);
                         }
+                    }
+
+                    render(0);
+
+                    btn.addEventListener("pointerenter", () => {
+                        指针在内 = true;
+                        if (!reduced && !悬停抑制 && !正在切换) 前往(0.5);
+                    });
+                    btn.addEventListener("pointerleave", () => {
+                        指针在内 = false;
+                        悬停抑制 = false;
+                        if (!reduced && !正在切换) 前往(0);
+                    });
+                    btn.addEventListener("click", () => {
+                        if (正在切换) return;
+                        if (reduced) { 完成切换(); return; }   // 减少动效偏好：直接瞬时切换
+                        正在切换 = true;
+                        前往(1);
                     });
                     return btn;
                 })(),

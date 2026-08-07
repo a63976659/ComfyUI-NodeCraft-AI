@@ -181,6 +181,52 @@
     animation: nca-glow-pulse 1.5s ease-in-out infinite;
 }
 
+/* ─── 主题切换按钮：日月交替动画 ─────────────────────────
+   天体弧线交换参考 Jhey Tompkins 的 sun/moon theme toggle 模式：
+   出场天体沿弧线落下、入场天体从另一侧弧线升起。
+   按钮本体不位移（仅内部天体子元素移动），符合 hover 防闪烁规范；
+   天体位置由 JS（rAF）驱动，此处只提供舞台与配色。 */
+.nca-icon-btn.theme-btn {
+    overflow: hidden;
+}
+
+.nca-theme-stage {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.nca-celestial {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    font-size: 14px;
+    line-height: 1;
+    will-change: transform, opacity;
+    pointer-events: none;
+}
+
+.nca-celestial.nca-sun {
+    color: #fbbf24;
+    text-shadow: 0 0 6px rgba(251, 191, 36, 0.55);
+}
+
+.nca-celestial.nca-moon {
+    color: #a5b4fc;
+    text-shadow: 0 0 6px rgba(165, 180, 252, 0.45);
+}
+
+/* 浅色主题：太阳加深避免在白底上发白，月亮转品牌蓝紫 */
+.nca-theme-light .nca-celestial.nca-sun {
+    color: #f59e0b;
+    text-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+}
+
+.nca-theme-light .nca-celestial.nca-moon {
+    color: #6366f1;
+    text-shadow: 0 0 6px rgba(99, 102, 241, 0.35);
+}
+
 /* ─── 浅色主题适配 ────────────────────────────────────────────
    品牌栏背景已通过 var(--nca-bg-secondary) 自动随主题切换，
    此处仅修正在浅色背景上视觉过暗/过冷的装饰元素：
