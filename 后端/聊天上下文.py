@@ -119,8 +119,61 @@ TAB_SYSTEM_PROMPTS = {
 _VALID_ACTIVE_TABS = ("develop", "optimize", "visualize")
 
 
+# ─── P0-1 前缀稳定化：动态上下文块 ──────────────────────────
+# 每轮都会变化的动态内容（知识库检索、主动踩坑、项目说明、文件树、AST 摘要、
+# 跨会话记忆）不再拼进 messages[0] 的 system prompt，而是由一条独立的
+# [本轮参考上下文] 消息承载，插在最后一条用户消息之前。
+# 这样「system + 历史」构成从第 0 条起字节级稳定的前缀，可命中
+# DeepSeek / Kimi / 百炼 / 智谱四家的前缀匹配式上下文缓存。
+# 动态块只能用 user 角色：Qwen3.5 chat_template 硬校验 system 必须首位，
+# 第二条 system 会直接报错（见既有踩坑记录）。
+_DYNAMIC_CONTEXT_PREFIX = "[本轮参考上下文]"
+
+
+def _构建动态上下文块(retrieved_rules: str = "", proactive_pitfalls: str = "",
+                     项目说明: str = "", 文件树摘要: str = "",
+                     项目摘要: str = "", 记忆文本: str = "",
+                     pattern_hint: str = "") -> str:
+    """把五类每轮变化的动态内容合成为一条 [本轮参考上下文] 消息正文。
+
+    各内容段保留原有小节标题；全部为空时返回空串（不插入动态块）。
+    动态块紧邻用户问题，规避 "lost in the middle" 注意力衰减。
+    """
+    parts = [p.strip("\n") for p in (
+        retrieved_rules, proactive_pitfalls, 项目说明,
+        文件树摘要, 项目摘要, 记忆文本, pattern_hint,
+    ) if p and p.strip()]
+    if not parts:
+        return ""
+    return _DYNAMIC_CONTEXT_PREFIX + "\n" + "\n\n".join(parts)
+
+
+def _追加动态块(complete_messages: list, text: str) -> None:
+    """按 [本轮参考上下文] 前缀匹配定位动态块并追加内容（无块时新建）。
+
+    新建的块插到最后一条用户消息之前（与 _build_chat_context 的组装规则一致）；
+    末条非 user 时追加到末尾，避免切断 assistant(tool_calls)→tool 相邻性。
+    """
+    if not text or not complete_messages:
+        return
+    # 传入文本自带前缀时先剥掉，否则新建分支会拼出双前缀
+    if text.startswith(_DYNAMIC_CONTEXT_PREFIX):
+        text = text[len(_DYNAMIC_CONTEXT_PREFIX):]
+        if not text:
+            return
+    for msg in complete_messages:
+        if msg.get("role") == "user" and str(msg.get("content", "")).startswith(_DYNAMIC_CONTEXT_PREFIX):
+            msg["content"] = str(msg.get("content", "")) + text
+            return
+    new_msg = {"role": "user", "content": _DYNAMIC_CONTEXT_PREFIX + text}
+    if complete_messages[-1].get("role") == "user":
+        complete_messages.insert(len(complete_messages) - 1, new_msg)
+    else:
+        complete_messages.append(new_msg)
+
+
 def _注入规划上下文(complete_messages: list, 计划结果: dict) -> None:
-    """将规划结果中的关键决策信息注入系统提示词。
+    """将规划结果中的关键决策信息注入动态上下文块（[本轮参考上下文]）。
 
     注入内容包括：
     - needs_frontend: 是否需要创建前端 JS 文件
@@ -128,12 +181,11 @@ def _注入规划上下文(complete_messages: list, 计划结果: dict) -> None:
     - needs_interactive_ui: 是否需要高级交互模式
     - reference_categories: 应查阅的技术方案类别
     - plan_steps: 执行步骤纲要
+
+    P0-1：不再写 messages[0] 的 system prompt（会破坏前缀缓存），
+    改为按前缀匹配定位动态块追加。
     """
     if not complete_messages or not 计划结果:
-        return
-
-    # system prompt 始终是 complete_messages 的第一条
-    if complete_messages[0]["role"] != "system":
         return
 
     parts = []
@@ -202,12 +254,12 @@ def _注入规划上下文(complete_messages: list, 计划结果: dict) -> None:
         parts.append(f"\n## 规划执行步骤\n{steps_text}")
 
     if parts:
-        complete_messages[0]["content"] += "".join(parts)
+        _追加动态块(complete_messages, "".join(parts))
 
 
 def _注入用户决策前端标志(complete_messages: list, 用户选择: dict) -> None:
-    """从用户确认的决策中提取前端需求标志，注入系统提示词。"""
-    if not complete_messages or complete_messages[0]["role"] != "system":
+    """从用户确认的决策中提取前端需求标志，注入动态上下文块。"""
+    if not complete_messages:
         return
 
     for q, a in 用户选择.items():
@@ -215,17 +267,17 @@ def _注入用户决策前端标志(complete_messages: list, 用户选择: dict)
         # 匹配用户关于需要/不需要前端的回答
         if "前端" in q or "界面" in q or "js" in q.lower():
             if any(kw in a_lower for kw in ("需要", "要", "是", "yes", "true")):
-                complete_messages[0]["content"] += (
+                _追加动态块(complete_messages, (
                     "\n## 用户决策：需要前端 JS 扩展\n"
                     "- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
                     "- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
-                )
+                ))
             elif any(kw in a_lower for kw in ("不需要", "不用", "否", "no", "false")):
-                complete_messages[0]["content"] += (
+                _追加动态块(complete_messages, (
                     "\n## 用户决策：无需前端 JS 扩展\n"
                     "- 该插件为纯 Python 节点，不需要创建 `网页资源/` 目录\n"
                     "- `__init__.py` 中不需要设置 `WEB_DIRECTORY`"
-                )
+                ))
             break
 
 
@@ -534,24 +586,24 @@ async def _build_chat_context(
             except Exception as e:
                 logger.debug(f"主动踩坑检索失败（忽略）: {e}")
 
-    # 5. 构造系统提示词（前缀稳定化：静态区在前、动态区在后）
-    # 静态区 = Tab 人格 + 工具使用指导，多轮请求间字节级不变，
-    # 可命中 GLM/Kimi/DeepSeek 等供应商的上下文前缀缓存降低计费与延迟。
+    # 5. 构造系统提示词（P0-1 前缀稳定化：只保留字节级恒定的静态段）
+    # 静态区 = Tab 人格 + 工具使用指导 + 回复语言指令，多轮请求间字节级不变，
+    # 可命中 DeepSeek/Kimi/百炼/智谱四家从第 0 条起前缀匹配的上下文缓存。
+    # 每轮变化的五类动态内容（知识库检索、主动踩坑、项目说明、文件树/AST 摘要、
+    # 跨会话记忆）全部移入 [本轮参考上下文] 独立消息（见步骤 8 组装）。
     base_prompt = TAB_SYSTEM_PROMPTS.get(active_tab, TAB_SYSTEM_PROMPTS["develop"])
     system_prompt = base_prompt
 
     plugin_path = _resolve_plugin_path(plugin_context)
     _has_plugin = bool(plugin_context) and plugin_path is not None and plugin_path.exists()
     if _has_plugin:
-        # 工具使用指导为纯静态文本，紧跟人格之后注入（先于动态检索内容）
+        # 工具使用指导为纯静态文本，紧跟人格之后注入
         system_prompt += _TOOL_USAGE_GUIDE
 
-    # 动态区：知识库检索 → 主动踩坑 → 插件上下文 → 记忆 → 工作模式提示
-    system_prompt += retrieved_rules
-    if proactive_pitfalls:
-        system_prompt += f"\n\n{proactive_pitfalls}"
-
-    # 5.1 插件上下文注入
+    # 动态区收集：知识库检索 → 主动踩坑 → 项目说明 → 文件树/项目摘要 → 记忆 → 工作模式提示
+    项目说明 = ""
+    文件树摘要 = ""
+    项目摘要 = ""
     if _has_plugin:
         # 项目级用户指令文件（对标 Claude Code 的 CLAUDE.md / Codex 的 AGENTS.md）：
         # 用户可在插件根目录放 AI说明.md，给 AI 留下该插件的专属规矩（如禁改目录、代码风格），
@@ -570,9 +622,7 @@ async def _build_chat_context(
                 if _指令内容:
                     if len(_指令内容) > 1000:
                         _指令内容 = _指令内容[:1000] + "\n…（说明过长已截断）"
-                    system_prompt += (
-                        f"\n\n## 用户项目说明（来自 {_指令文件.name}，须严格遵守）\n{_指令内容}"
-                    )
+                    项目说明 = f"## 用户项目说明（来自 {_指令文件.name}，须严格遵守）\n{_指令内容}"
         except Exception as e:
             logger.debug(f"读取项目指令文件失败（忽略）: {e}")
 
@@ -584,8 +634,8 @@ async def _build_chat_context(
             # 文件树摘要限幅：超长目录截断到 600 字符，完整结构可用 list_plugin_files 获取
             if len(tree_summary) > 600:
                 tree_summary = tree_summary[:600] + "\n…（目录过大已截断，完整结构请调用 list_plugin_files）"
-            system_prompt += (
-                f"\n\n## 当前操作的插件: {plugin_context}\n"
+            文件树摘要 = (
+                f"## 当前操作的插件: {plugin_context}\n"
                 f"插件路径: {plugin_path}\n"
                 f"文件结构:\n{tree_summary}\n\n"
                 "以上文件结构已提供，无需调用 list_plugin_files 重复获取。"
@@ -595,31 +645,35 @@ async def _build_chat_context(
             # 项目上下文深度分析（AST 级结构化摘要）
             if _项目上下文分析器 is not None:
                 try:
-                    项目摘要 = await asyncio.to_thread(_项目上下文分析器.分析项目, plugin_path)
-                    if 项目摘要:
-                        system_prompt += f"\n\n--- 当前插件项目上下文 ---\n{项目摘要}"
+                    _项目摘要文本 = await asyncio.to_thread(_项目上下文分析器.分析项目, plugin_path)
+                    if _项目摘要文本:
+                        项目摘要 = f"--- 当前插件项目上下文 ---\n{_项目摘要文本}"
                 except Exception as e:
                     logger.debug(f"项目上下文分析失败: {e}")
         except Exception as e:
             logger.exception(f"注入插件上下文失败: {e}")
 
-    # 5.2 注入跨会话记忆
+    # 跨会话记忆
+    记忆文本 = ""
     if _记忆管理器 is not None:
         try:
-            _记忆文本 = await asyncio.to_thread(
+            记忆文本 = await asyncio.to_thread(
                 _记忆管理器.获取记忆注入文本,
                 str(plugin_path) if plugin_path else None,
-            )
-            if _记忆文本:
-                system_prompt += _记忆文本
+            ) or ""
         except Exception as e:
             logger.debug(f"跨会话记忆注入失败（忽略）: {e}")
 
-    # 5.3 注入待处理的工作模式提示（上一轮检测到的重复模式）
-    _pending_hint = session_data.pop("_pending_pattern_hint", None)
+    # 待处理的工作模式提示（上一轮检测到的重复模式）
+    _pending_hint = session_data.pop("_pending_pattern_hint", None) or ""
     if _pending_hint:
-        system_prompt += _pending_hint
         logger.debug(f"注入工作模式提示: {_pending_hint[:80]}...")
+
+    # 合成动态上下文块（由独立的 user 消息承载，见步骤 8 组装）
+    动态上下文块 = _构建动态上下文块(
+        retrieved_rules, proactive_pitfalls, 项目说明,
+        文件树摘要, 项目摘要, 记忆文本, _pending_hint,
+    )
 
     # 5.4 回复语言指令：跟随前端界面语言（双语切换按钮），覆盖模型默认输出语言。
     # 放在系统提示末尾（最后、最强的一句），本地模型与 API 模型共用此单一注入点。
@@ -704,6 +758,16 @@ async def _build_chat_context(
             history_to_send[last_user_idx] = new_msg
 
     # 8. 构建完整 messages 列表
+    # P0-1：动态上下文块插到最后一条用户消息之前（role=user 单条消息）；
+    # history_to_send 为空或末条非 user 时追加到末尾。
+    # history_to_send 是压缩层返回的新副本，插入不会污染 session_data；
+    # 非流式链路（handle_chat）同样消费 history_to_send，两条路径行为一致。
+    if 动态上下文块:
+        _动态消息 = {"role": "user", "content": 动态上下文块}
+        if history_to_send and history_to_send[-1].get("role") == "user":
+            history_to_send.insert(len(history_to_send) - 1, _动态消息)
+        else:
+            history_to_send.append(_动态消息)
     complete_messages = [{"role": "system", "content": system_prompt}] + history_to_send
 
     # model_source（已在步骤 4 并行压缩前确定）

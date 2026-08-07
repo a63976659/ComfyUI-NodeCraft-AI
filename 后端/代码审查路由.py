@@ -766,7 +766,9 @@ async def handle_code_review(request):
                 }, status=500)
             reply = await local_model_client.generate_response(system_prompt, messages)
         else:
-            reply = await llm_client.generate_response(system_prompt, messages)
+            reply = await llm_client.generate_response(
+                system_prompt, messages, response_format={"type": "json_object"}
+            )
 
         # 6. 解析审查结果
         review_result = _解析审查结果(reply)

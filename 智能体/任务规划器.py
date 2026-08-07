@@ -582,7 +582,10 @@ async def 生成执行计划(user_message: str, plugin_path, llm_client, setting
 
     # 非流式调用 LLM
     try:
-        原始输出 = await llm_client.generate_response(_规划系统提示词, 消息列表)
+        # 原生 JSON Output（规划仅在 model_source=="api" 时执行，客户端能力表外自动跳过）
+        原始输出 = await llm_client.generate_response(
+            _规划系统提示词, 消息列表, response_format={"type": "json_object"}
+        )
     except Exception as e:
         logger.warning(f"[生成执行计划] LLM 调用异常，降级: {type(e).__name__}: {e}")
         return None

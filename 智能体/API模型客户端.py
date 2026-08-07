@@ -143,7 +143,8 @@ def _检测写意图(messages: list) -> bool:
                 p.get("text", "") for p in content if isinstance(p, dict)
             )
         content = str(content or "").strip()
-        if not content or content.startswith(("[系统提醒", "[系统提示")):
+        # 系统注入的提醒消息与 P0-1 动态上下文块/操作台账不参与意图判断
+        if not content or content.startswith(("[系统提醒", "[系统提示", "[本轮参考上下文]", "[操作台账]")):
             continue
         真实消息.append(content)
     if not 真实消息:
@@ -204,6 +205,11 @@ class AICoderClient:
         # chars→token 估算系数：中文实测约 0.6、英文代码约 0.3，默认 0.75 偏保守；
         # 每轮用 API 返回的 usage.prompt_tokens 动态校准（EMA 平滑）
         self._token估算系数 = 0.75
+        # P0-3 前缀缓存累计统计（供 获取性能报告 输出累计命中率）
+        self._缓存累计命中tokens = 0
+        self._缓存累计输入tokens = 0
+        # 客户端是全局单例，多模型混用时总计会互相稀释，另按模型名分桶便于定位
+        self._缓存分模型统计 = {}  # 模型名 → [命中tokens, 输入tokens]
 
     def _build_api_headers(self, settings: dict) -> dict:
         """构建 OpenAI 兼容 API 请求头（用户自持 API Key 直连）。
@@ -280,6 +286,72 @@ class AICoderClient:
         其他供应商（通义千问、DeepSeek reasoner 等）回传反而会报错。
         """
         return bool(self._思考能力(model_name).get("回传"))
+
+    def _supports_JSON输出(self, model_name: str) -> bool:
+        """查询模型是否支持原生 response_format={\"type\": \"json_object\"}
+
+        沿用 _思考能力表 的前缀匹配风格；未知供应商一律 False，
+        避免向不支持的端点传 response_format 导致 400。
+        """
+        名 = (model_name or "").lower()
+        for 前缀, 支持 in self._JSON输出能力表:
+            if 名.startswith(前缀):
+                return 支持
+        return False
+
+    # ===== 原生 JSON Output 能力表（按模型名前缀匹配）=====
+    # DeepSeek / Kimi / 智谱 GLM / 通义千问（百炼）均官方支持 json_object；
+    # 未知供应商 False（防 400），降级走 JSON修复工具 兜底
+    _JSON输出能力表 = (
+        ("deepseek-", True),
+        ("kimi-", True),
+        ("glm-", True),
+        ("qwen", True),
+    )
+
+    # ===== 前缀续写能力（P1-2：替换"追加 user 提示"的截断续写土办法）=====
+    def _前缀续写能力(self, model_name: str):
+        """返回供应商官方续写协议：
+
+        - "partial": Kimi（末条 assistant 消息带 partial: True；
+          思考模式官方要求带回 reasoning_content）
+        - "prefix": DeepSeek（末条 assistant 消息带 prefix: True，需 /beta 端点）
+        - None: 无一手文档（千问/GLM 等），保留现有追加 user 提示的土办法，不猜测
+        """
+        名 = (model_name or "").lower()
+        if 名.startswith("kimi-"):
+            return "partial"
+        if 名.startswith("deepseek-"):
+            return "prefix"
+        return None
+
+    def _beta端点(self, base_url: str) -> str:
+        """将 base_url 的 path 替换为 /beta（DeepSeek prefix 续写与 FIM 需 beta 端点）
+
+        兼容用户填 https://api.deepseek.com 与 https://api.deepseek.com/v1 两种写法。
+        """
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse((base_url or "").rstrip("/"))
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}/beta"
+        except ValueError:
+            pass
+        return (base_url or "").rstrip("/") + "/beta"
+
+    # ===== FIM（Fill-In-the-Middle）能力表（P1-3）=====
+    # 仅 DeepSeek 官方提供 /beta/completions 的 prompt+suffix FIM；
+    # Kimi 无 FIM，GLM/Qwen 无一手文档 → 保守保留伪标签方案（不猜测，猜错直接 400）
+    _FIM能力表 = (
+        ("deepseek-", True),
+    )
+
+    def _支持FIM(self, model_name: str) -> bool:
+        名 = (model_name or "").lower()
+        for 前缀, 支持 in self._FIM能力表:
+            if 名.startswith(前缀):
+                return 支持
+        return False
 
     def _max_tokens参数名(self, model_name: str) -> str:
         """输出长度参数的字段名
@@ -358,6 +430,13 @@ class AICoderClient:
                 if role == "tool":
                     content = _normalize_tool_content(content)
                 new_msg = {"role": role, "content": content}
+                # 保留 assistant 的 tool_calls / reasoning_content（OpenAI 协议必需；
+                # 历史工具轮消息被剥掉 tool_calls 会让配对校验误判 tool 消息为孤立并删除）
+                if role == "assistant":
+                    if "tool_calls" in msg:
+                        new_msg["tool_calls"] = msg["tool_calls"]
+                    if "reasoning_content" in msg:
+                        new_msg["reasoning_content"] = msg["reasoning_content"]
                 # 保留 tool 消息的 tool_call_id（OpenAI 协议必需）
                 if role == "tool" and "tool_call_id" in msg:
                     new_msg["tool_call_id"] = msg["tool_call_id"]
@@ -409,6 +488,46 @@ class AICoderClient:
         except (TypeError, ValueError, ZeroDivisionError):
             pass
 
+    def _解析缓存命中(self, usage: dict) -> tuple:
+        """从 usage 中解析前缀缓存命中 tokens，兼容两种供应商字段风格：
+
+        - DeepSeek：usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens
+        - Kimi / 智谱 / 百炼：usage.prompt_tokens_details.cached_tokens
+          （百炼另有 cache_creation_input_tokens，不计入命中）
+
+        返回 (命中tokens, 总输入tokens)；无法解析时返回 (0, 0)。
+        """
+        if not usage or not isinstance(usage, dict):
+            return 0, 0
+        try:
+            hit = usage.get("prompt_cache_hit_tokens")
+            if hit is not None:
+                miss = usage.get("prompt_cache_miss_tokens") or 0
+                return int(hit), int(hit) + int(miss)
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            details = usage.get("prompt_tokens_details") or {}
+            cached = details.get("cached_tokens") if isinstance(details, dict) else None
+            if cached is not None:
+                return int(cached), prompt_tokens
+        except (TypeError, ValueError):
+            pass
+        return 0, 0
+
+    def _记录缓存命中(self, usage: dict, 轮次: int) -> None:
+        """P0-3 前缀缓存可观测：解析命中率、累计统计并打日志（本方案的验收标尺）"""
+        _命中, _总输入 = self._解析缓存命中(usage)
+        if _总输入 <= 0:
+            return  # 供应商未返回缓存字段（或解析失败），不输出误导性日志
+        self._缓存累计命中tokens += _命中
+        self._缓存累计输入tokens += _总输入
+        _桶 = self._缓存分模型统计.setdefault(self.当前模型名 or "未知", [0, 0])
+        _桶[0] += _命中
+        _桶[1] += _总输入
+        logger.info(
+            f"[前缀缓存] 第{轮次}轮 命中 {_命中}/{_总输入} tokens "
+            f"({_命中 / max(_总输入, 1) * 100:.1f}%)"
+        )
+
     def _compress_tool_messages(self, messages: list) -> list:
         """压缩消息列表中的 tool 消息（使用摘要器）
 
@@ -417,6 +536,10 @@ class AICoderClient:
         最后一轮的读取结果不折叠（模型可能正在使用）；
         已截断/摘要过的内容不再重复调用摘要器（避免对摘要再摘要产生噪音），
         直接硬截断并保留原始长度信息。
+
+        P0-2 append-only：压缩结果就地固化（打 _已压缩 标记），后续轮次
+        遇到该标记直接跳过重算。保证任一条消息一旦压缩，其文本在后续
+        所有请求中字节一致，避免重算导致前缀缓存持续断裂。
         """
         from .工具结果摘要器 import 已被截断, 摘要化工具结果
 
@@ -426,29 +549,30 @@ class AICoderClient:
             if m.get("role") == "assistant" and "tool_calls" in m:
                 _最后轮起点 = i
 
-        result = []
         for i, msg in enumerate(messages):
-            if msg.get("role") == "tool":
-                # 先正规化为字符串（None/dict/list 等非字符串兜底）再判长度
-                content = _normalize_tool_content(msg.get("content", ""))
-                if len(content) > 800:
-                    # 从上下文推断 tool_name
-                    tool_name = self._infer_tool_name(messages, msg)
-                    if tool_name in _文件读取类工具 and i < _最后轮起点:
-                        # P2-14 探索折叠：历史读取结果保留首行定位信息即可
-                        首行 = content.split("\n", 1)[0].strip()[:150]
-                        compressed = f"{首行}\n[历史读取结果已折叠，如需内容请重新读取该文件]"
-                    elif 已被截断(content):
-                        # 已压缩过的内容直接硬截断，不再重复摘要
-                        compressed = content[:800] + f"\n...[内容已截断，原始长度 {len(content)} 字符]"
-                    else:
-                        compressed = 摘要化工具结果(tool_name, content, max_chars=800)
-                    result.append({**msg, "content": compressed})
+            if msg.get("role") != "tool":
+                continue
+            if msg.get("_已压缩"):
+                continue  # 已固化：跳过重算，确保文本跨轮次字节一致
+            # 先正规化为字符串（None/dict/list 等非字符串兜底）再判长度
+            content = _normalize_tool_content(msg.get("content", ""))
+            if len(content) > 800:
+                # 从上下文推断 tool_name
+                tool_name = self._infer_tool_name(messages, msg)
+                if tool_name in _文件读取类工具 and i < _最后轮起点:
+                    # P2-14 探索折叠：历史读取结果保留首行定位信息即可
+                    首行 = content.split("\n", 1)[0].strip()[:150]
+                    compressed = f"{首行}\n[历史读取结果已折叠，如需内容请重新读取该文件]"
+                elif 已被截断(content):
+                    # 已压缩过的内容直接硬截断，不再重复摘要
+                    compressed = content[:800] + f"\n...[内容已截断，原始长度 {len(content)} 字符]"
                 else:
-                    result.append({**msg, "content": content})
+                    compressed = 摘要化工具结果(tool_name, content, max_chars=800)
+                msg["content"] = compressed
+                msg["_已压缩"] = True  # 内部标记，_构建请求payload 发送前会剥除
             else:
-                result.append(msg)
-        return result
+                msg["content"] = content
+        return messages
 
     def _infer_tool_name(self, messages: list, tool_msg: dict) -> str:
         """从上下文推断 tool 消息对应的工具名"""
@@ -463,8 +587,13 @@ class AICoderClient:
                         return tc.get("function", {}).get("name", "unknown")
         return "unknown"
 
-    def _drop_oldest_tool_pairs(self, messages: list) -> list:
-        """删除最早的 tool_calls assistant + tool 消息对"""
+    def _drop_oldest_tool_pairs(self, messages: list, model_name: str = "", 上下文窗口: int = 0) -> list:
+        """删除最早的 tool_calls assistant + tool 消息对（最后兜底，正常不应触发）
+
+        P0-2：删除历史会使前缀从第 0 条起全废且直接失忆，故触发阈值提到
+        _limit*0.98，触发时以 error 级别记录模型名与上下文窗口，
+        便于发现窗口配置错误（1M 窗口模型正常不应触发）。
+        """
         # 找到第一个含 tool_calls 的 assistant 消息
         for i, msg in enumerate(messages):
             if msg.get("role") == "assistant" and "tool_calls" in msg:
@@ -473,16 +602,20 @@ class AICoderClient:
                 while end < len(messages) and messages[end].get("role") == "tool":
                     end += 1
                 # 删除 i 到 end 之间的所有消息
-                logger.info(f"[动态窗口] 删除第 {i}-{end-1} 条消息（最早的工具调用对）")
+                logger.error(
+                    f"[动态窗口] 删除第 {i}-{end-1} 条消息（最早的工具调用对）"
+                    f" | model={model_name or '未知'}, 上下文窗口={上下文窗口}"
+                )
                 return messages[:i] + messages[end:]
         return messages
 
     def _更新操作台账(self, messages: list, 已修改文件: set, 已读文件: set, 任务计划: str = "") -> list:
         """P2-12 操作台账：压缩/删除历史消息时注入已完成操作清单，防止模型遗忘重做。
 
-        台账以 user 消息形式放在首个 user 消息之后（不破坏 tool_calls 配对），
-        已存在则原地更新，避免重复注入。任务计划（update_plan 最新清单）一并保活，
-        防止旧轮次 tool 消息被压缩/删除后长任务跑偏。
+        P0-2 append-only：台账以新的一条 user 消息追加到 messages 末尾
+        （末条为 user 时插到它之前，不切断 assistant(tool_calls)→tool 相邻性），
+        不再原地改写已发送过的消息；旧台账保留在历史中（内容小，代价可忽略），
+        保证前缀稳定不断裂。
         """
         if not 已修改文件 and not 已读文件 and not 任务计划:
             return messages
@@ -494,25 +627,34 @@ class AICoderClient:
         if 任务计划:
             行.append("当前任务计划（继续按此推进）：\n" + 任务计划)
         台账 = "\n".join(行)
-        # 已存在台账 → 原地更新
-        for msg in messages:
-            if msg.get("role") == "user" and str(msg.get("content", "")).startswith("[操作台账]"):
-                msg["content"] = 台账
-                return messages
-        # 插入到首个 user 消息之后（安全位置：不会切断 assistant(tool_calls)→tool 相邻性）
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "user":
-                return messages[:i + 1] + [{"role": "user", "content": 台账}] + messages[i + 1:]
+        新台账消息 = {"role": "user", "content": 台账}
+        if messages and messages[-1].get("role") == "user":
+            messages.insert(len(messages) - 1, 新台账消息)
+        else:
+            messages.append(新台账消息)
         return messages
 
     def _构建请求payload(self, model_name, messages, max_tokens, temperature,
-                        settings, tools_payload, 工具不支持降级, 流式=False):
-        """构建 API 请求 payload 并校验消息配对（非流式/流式共用）"""
+                        settings, tools_payload, 工具不支持降级, 流式=False, response_format=None):
+        """构建 API 请求 payload 并校验消息配对（非流式/流式共用）
+
+        P1-1：response_format 非空且模型在 _JSON输出能力表 内时透传（原生 JSON Output）；
+        不支持的模型静默不传，降级走 JSON修复工具 兜底。
+        """
+        # 发送前校验消息配对（防止 tool_calls 与 tool 响应不匹配导致 API 400 错误）
+        self._校验消息配对(messages)
+        # 剥除内部标记字段（如 P0-2 的 _已压缩），避免把非协议字段发给 API
+        clean_messages = [
+            ({k: v for k, v in m.items() if not k.startswith("_")} if isinstance(m, dict) else m)
+            for m in messages
+        ]
         payload = {
             "model": model_name,
-            "messages": messages,
+            "messages": clean_messages,
             self._max_tokens参数名(model_name): max_tokens,
         }
+        if response_format and self._supports_JSON输出(model_name):
+            payload["response_format"] = response_format
         if 流式:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
@@ -536,8 +678,6 @@ class AICoderClient:
         if tools_payload and not 工具不支持降级:
             payload["tools"] = tools_payload
 
-        # 发送前校验消息配对（防止 tool_calls 与 tool 响应不匹配导致 API 400 错误）
-        self._校验消息配对(messages)
         return payload
 
     def _工具去重检测(self, _tc_infos, _工具执行历史, _已修改文件集, tool_executor, 流式=False,
@@ -768,140 +908,14 @@ class AICoderClient:
             })
         return _熔断中断, _熔断工具名
 
-    def _剥离工具指南(self, messages: list) -> list:
-        """提案3：首轮工具调用后剥离系统提示中的工具使用指南，减少后续轮次 token 消耗。
-
-        通过精确匹配 _TOOL_USAGE_GUIDE 文本内容并移除，
-        不依赖标记位置，避免误删标记之后的项目分析、记忆、规划等上下文。
-        """
-        if not messages or messages[0].get("role") != "system":
-            return messages
-        content = messages[0].get("content", "")
-        # 延迟导入避免循环依赖（与文件顶部一致使用绝对导入；直指真实定义处，不依赖 re-export）
-        from 后端.聊天上下文 import _TOOL_USAGE_GUIDE
-        if _TOOL_USAGE_GUIDE not in content:
-            return messages
-        new_content = content.replace(_TOOL_USAGE_GUIDE, "").strip()
-        logger.info(f"[提案3] 首轮后剥离工具指南: 系统提示 {len(content)} → {len(new_content)} 字符")
-        result = [dict(messages[0])]
-        result[0]["content"] = new_content
-        result.extend(messages[1:])
-        return result
-
-    def _主动压缩旧工具轮次(self, messages: list) -> list:
-        """提案1：主动压缩旧轮次的工具消息结果。
-
-        与动态窗口控制（85% 才触发）不同，此方法在工具循环第 3 轮起主动执行，
-        定位倒数第 3 轮的起始位置作为分割点：
-        - 分割点之前 = 旧轮次（工具结果被摘要器压缩到 800 字符）
-        - 分割点之后 = 最近 3 轮（保持完整，不压缩）
-        至少需要 4 轮工具调用才会产生实际压缩效果。
-        """
-        from .工具结果摘要器 import 摘要化工具结果
-
-        # 从后往前找到第 3 轮（倒数第 3 轮）的起始位置
-        # split_idx 之前的消息 = 旧轮次（压缩），之后 = 最近 3 轮（保持完整）
-        round_count = 0
-        split_idx = len(messages)
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "assistant" and messages[i].get("tool_calls"):
-                round_count += 1
-                if round_count >= 3:
-                    split_idx = i
-                    break
-
-        if round_count < 4:
-            return messages  # 不足 4 轮工具调用时，旧轮次为 0，无需压缩
-
-        result = list(messages[:split_idx])
-        for msg in messages[split_idx:]:
-            if msg.get("role") == "tool":
-                content = msg.get("content", "")
-                if len(content) > 800:
-                    tool_name = self._infer_tool_name(messages, msg)
-                    compressed = 摘要化工具结果(tool_name, content, max_chars=800)
-                    result.append({**msg, "content": compressed})
-                else:
-                    result.append(msg)
-            else:
-                result.append(msg)
-
-        原始字符 = sum(len(str(m.get("content", ""))) for m in messages)
-        压缩后字符 = sum(len(str(m.get("content", ""))) for m in result)
-        logger.info(f"[提案1] 主动压缩旧工具轮次: {原始字符} → {压缩后字符} 字符 (节省 {原始字符 - 压缩后字符})")
-        return result
-
-    def _尝试阶段压缩(self, messages: list, 当前轮次: int) -> list:
-        """提案4：分阶段执行 — 当工具循环超过阈值时，将历史压缩为结构化摘要。
-
-        类似 QoderWork 的子任务隔离模式：完成阶段性工作后，将上下文重置为
-        「已完成摘要 + 原始请求」，后续轮次在精简的上下文中继续工作。
-        避免上下文随轮次线性增长导致超时。
-        """
-        # 统计工具调用轮次
-        工具轮次数 = sum(1 for m in messages if m.get("role") == "assistant" and m.get("tool_calls"))
-        if 工具轮次数 < 6:
-            return messages  # 不足 6 轮，不触发
-
-        # 收集所有工具调用信息
-        工具调用记录 = []
-        for msg in messages:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    fn = tc.get("function", {})
-                    工具调用记录.append(fn.get("name", "unknown"))
-
-        # 找到原始用户请求（跳过系统提示和注入的提示消息）
-        原始用户消息 = ""
-        for msg in messages:
-            if msg.get("role") == "user":
-                内容 = msg.get("content", "")
-                if not 内容.startswith("[系统") and not 内容.startswith("[历史对话摘要]"):
-                    原始用户消息 = 内容
-                    break
-
-        # 统计各工具调用次数
-        工具计数 = {}
-        for name in 工具调用记录:
-            工具计数[name] = 工具计数.get(name, 0) + 1
-        工具摘要行 = "、".join(f"{name}({count}次)" for name, count in 工具计数.items())
-
-        # 构建阶段摘要消息
-        阶段摘要 = (
-            f"[阶段摘要] 此前已执行 {len(工具调用记录)} 次工具调用（{工具摘要行}）。\n"
-            f"所有文件修改已生效，无需重复执行相同操作。\n"
-            f"如需修改已操作过的文件，请用 read_plugin_file 重新读取最新内容。\n"
-            f"\n原始任务：{原始用户消息[:500]}"
-        )
-
-        # 重建精简上下文：系统提示 + 原始用户消息 + 阶段摘要
-        system_msg = messages[0] if messages[0].get("role") == "system" else None
-        new_messages = []
-        if system_msg:
-            new_messages.append(system_msg)
-        if 原始用户消息:
-            new_messages.append({"role": "user", "content": 原始用户消息})
-        new_messages.append({"role": "assistant", "content": 阶段摘要})
-        new_messages.append({
-            "role": "user",
-            "content": "[系统] 上下文已压缩。请继续完成任务。如需查看之前修改的文件，请重新读取。"
-        })
-
-        原始字符 = sum(len(str(m.get("content", ""))) for m in messages)
-        压缩后字符 = sum(len(str(m.get("content", ""))) for m in new_messages)
-        logger.info(
-            f"[提案4] 阶段压缩 @第{当前轮次+1}轮: "
-            f"{len(messages)}条/{原始字符}字符 → {len(new_messages)}条/{压缩后字符}字符"
-        )
-        return new_messages
-
     async def _获取会话(self):
         """获取或创建持久的 aiohttp 会话"""
         if self._会话 is None or self._会话.closed:
             self._会话 = aiohttp.ClientSession()
         return self._会话
 
-    async def generate_response(self, system_prompt, messages_history, tools=None, tool_executor=None):
+    async def generate_response(self, system_prompt, messages_history, tools=None, tool_executor=None,
+                                response_format=None):
         """调用 LLM API 生成回复（支持 OpenAI Function Calling 工具调用循环）
 
         特性：
@@ -916,6 +930,8 @@ class AICoderClient:
         Args:
             tools: OpenAI 风格的工具描述列表（function 字典数组），传 None 时行为与原版一致
             tool_executor: async 回调 (tool_name, tool_args) -> str，用于执行工具
+            response_format: P1-1 原生 JSON Output（如 {"type": "json_object"}），
+                仅对 _JSON输出能力表 内的模型透传，其余模型静默忽略
         """
         开始时间 = time.time()
         settings = load_settings()
@@ -988,23 +1004,27 @@ class AICoderClient:
             _limit = self._get_model_context_limit(model_name)
 
             _发生压缩 = False
-            if _estimated > _limit * 0.90:
+            if _estimated > _limit * 0.95:
                 complete_messages = self._compress_tool_messages(complete_messages)
                 logger.warning(f"[动态窗口] token预估({_estimated})接近上限({_limit})，已压缩工具消息文本")
                 _estimated = self._estimate_tokens(complete_messages)
                 _发生压缩 = True
 
             # 兜底：压缩后仍超限 → 逐对删除最早的工具消息对，防止上下文无限膨胀
+            # P0-2：阈值 0.95→0.98，删除历史会废掉全部前缀缓存并直接失忆，尽量晚触发
             _drop次数 = 0
-            while _estimated > _limit * 0.95 and _drop次数 < 20:
-                _新消息 = self._drop_oldest_tool_pairs(complete_messages)
+            while _estimated > _limit * 0.98 and _drop次数 < 20:
+                _新消息 = self._drop_oldest_tool_pairs(complete_messages, model_name, _limit)
                 if len(_新消息) == len(complete_messages):
                     break
                 complete_messages = _新消息
                 _estimated = self._estimate_tokens(complete_messages)
                 _drop次数 += 1
             if _drop次数:
-                logger.warning(f"[动态窗口] 压缩后仍超限，已删除最早的 {_drop次数} 组工具消息对，当前预估 {_estimated}")
+                logger.error(
+                    f"[动态窗口] 压缩后仍超限，已删除最早的 {_drop次数} 组工具消息对，当前预估 {_estimated}"
+                    f" | model={model_name}, 上下文窗口={_limit}"
+                )
 
             # P2-12：压缩/删除发生后注入操作台账，防止模型遗忘已完成操作重复执行
             if _发生压缩 or _drop次数:
@@ -1016,6 +1036,7 @@ class AICoderClient:
             payload = self._构建请求payload(
                 model_name, complete_messages, max_tokens, temperature,
                 settings, tools_payload, 工具不支持降级,
+                response_format=response_format,
             )
 
             响应数据 = None
@@ -1093,6 +1114,7 @@ class AICoderClient:
             if _usage:
                 self.上次usage = _usage
                 self._校准token估算(complete_messages, _usage)
+                self._记录缓存命中(_usage, 工具轮次 + 1)
 
             choice = 响应数据["choices"][0]
             finish_reason = choice.get("finish_reason", "stop")
@@ -1162,24 +1184,50 @@ class AICoderClient:
             content = re.sub(r'lld[\s\S]*?ullets', '', content)
             content = re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
 
-            # P0: 截断续写
+            # P0: 截断续写（P1-2：优先官方 partial/prefix 前缀续写协议）
             if finish_reason == "length":
                 logger.info("API 输出被截断，尝试续写...")
                 try:
-                    续写messages = complete_messages.copy()
-                    续写messages.append({"role": "assistant", "content": content})
-                    续写messages.append({
-                        "role": "user",
-                        "content": "你的输出被截断了，请从中断处继续完成，不要重复已输出的部分。"
-                    })
+                    _续写风格 = self._前缀续写能力(model_name)
+                    if _续写风格:
+                        # 官方协议：末条 assistant 消息带 partial/prefix 标记承载已输出内容，
+                        # 模型从断点自然接续，无重复文本；不再追加"你被截断了"的 user 消息
+                        _前缀消息 = {"role": "assistant", "content": content, _续写风格: True}
+                        # Kimi 思考模式官方要求续写时带回 reasoning_content
+                        if _续写风格 == "partial" and message.get("reasoning_content"):
+                            _前缀消息["reasoning_content"] = message["reasoning_content"]
+                        续写messages = complete_messages + [_前缀消息]
+                        # DeepSeek prefix 续写需 /beta 端点；Kimi partial 走标准端点
+                        _续写url = (f"{self._beta端点(base_url)}/chat/completions"
+                                    if _续写风格 == "prefix" else url)
+                    else:
+                        # 无官方协议的供应商（千问/GLM 等）：保留现有土办法，行为不变
+                        续写messages = complete_messages.copy()
+                        续写messages.append({"role": "assistant", "content": content})
+                        续写messages.append({
+                            "role": "user",
+                            "content": "你的输出被截断了，请从中断处继续完成，不要重复已输出的部分。"
+                        })
+                        _续写url = url
                     续写payload = {
                         "model": model_name,
-                        "messages": 续写messages,
-                        self._max_tokens参数名(model_name): max_tokens // 2
+                        # 续写 payload 手工组装不经 _构建请求payload，需同样剥除内部标记
+                        # （如压缩固化的 _已压缩），避免非协议字段发给 API
+                        "messages": [
+                            ({k: v for k, v in m.items() if not k.startswith("_")}
+                             if isinstance(m, dict) else m)
+                            for m in 续写messages
+                        ],
+                        # 官方明确续写要给足 max_tokens，否则再次截断（原 //2 减半是错的）
+                        self._max_tokens参数名(model_name): max_tokens
                     }
                     if not self._temperature固定(model_name):
                         续写payload["temperature"] = temperature
-                    async with 会话.post(url, json=续写payload, headers=headers,
+                    # JSON 任务被截断时，续写段同样要受 json_object 约束，
+                    # 否则续写文本脱离 JSON 语法，拼接后只能靠修复工具兜底
+                    if response_format and self._supports_JSON输出(model_name):
+                        续写payload["response_format"] = response_format
+                    async with 会话.post(_续写url, json=续写payload, headers=headers,
                                         timeout=aiohttp.ClientTimeout(
                                             total=_total,
                                             sock_connect=15,
@@ -1190,6 +1238,9 @@ class AICoderClient:
                             续写content = re.sub(r'lld[\s\S]*?ullets', '', 续写content)
                             续写content = re.sub(r'<thinking>[\s\S]*?</thinking>', '', 续写content).strip()
                             content = content + 续写content
+                        else:
+                            _续写错误 = await 续写resp.text()
+                            logger.warning(f"续写请求返回 {续写resp.status}: {_续写错误[:200]}")
                 except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, KeyError) as e:
                     logger.exception(f"续写失败: {e}")
 
@@ -1232,7 +1283,42 @@ class AICoderClient:
 
             headers = self._build_api_headers(settings)
 
-            # 构建补全请求消息
+            会话 = await self._获取会话()
+
+            # 保持代码补全的快速响应特性：使用 completion_timeout（毫秒→秒），默认8秒
+            _completion_timeout_ms = settings.get("completion_timeout", 8000)
+            _total_timeout = max(_completion_timeout_ms / 1000, 3)  # 至少3秒
+            _completion_timeout = aiohttp.ClientTimeout(total=_total_timeout, sock_connect=10)
+
+            # P1-3：DeepSeek 走官方 FIM（/beta/completions 的 prompt+suffix，取 choices[0].text）；
+            # FIM 最大补全长度 4K（官方限制），当前 100 tokens 无冲突。
+            # 其余供应商（Kimi 无 FIM，GLM/Qwen 未确认）按 _FIM能力表 分流，
+            # 继续走现有 <|prefix|>/<|cursor|> 伪标签方案，行为不变。
+            if self._支持FIM(model_name):
+                fim_url = f"{self._beta端点(base_url)}/completions"  # 注意：非 chat/completions
+                fim_payload = {
+                    "model": model_name,
+                    "prompt": prefix,
+                    "suffix": suffix or "",
+                    "max_tokens": 100,
+                }
+                if not self._temperature固定(model_name):
+                    fim_payload["temperature"] = 0.1
+                logger.debug(f"[代码补全] DeepSeek FIM 请求: {fim_url}")
+                async with 会话.post(fim_url, json=fim_payload, headers=headers,
+                                    timeout=_completion_timeout) as resp:
+                    if resp.status == 200:
+                        响应数据 = await resp.json()
+                        self.上次usage = 响应数据.get("usage")  # 保存 token 用量（监控指标依赖此字段）
+                        content = 响应数据["choices"][0].get("text") or ""  # FIM 取 text 而非 message.content
+                        content = re.sub(r'lld[\s\S]*?ullets', '', content)
+                        content = re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
+                        return content
+                    error_text = await resp.text()
+                    logger.warning(f"[代码补全] FIM API 返回状态码 {resp.status}: {error_text[:300]}")
+                    return ""
+
+            # 构建补全请求消息（伪标签方案）
             if suffix:
                 user_content = f"<|prefix|>\n{prefix}\n<|cursor|>\n<|suffix|>\n{suffix}"
             else:
@@ -1252,17 +1338,9 @@ class AICoderClient:
                 payload["temperature"] = 0.1
 
             url = f"{base_url}/chat/completions"
-            会话 = await self._获取会话()
-
-            # 保持代码补全的快速响应特性：使用 completion_timeout（毫秒→秒），默认8秒
-            _completion_timeout_ms = settings.get("completion_timeout", 8000)
-            _total_timeout = max(_completion_timeout_ms / 1000, 3)  # 至少3秒
 
             async with 会话.post(url, json=payload, headers=headers,
-                                timeout=aiohttp.ClientTimeout(
-                                    total=_total_timeout,
-                                    sock_connect=10,
-                                )) as resp:
+                                timeout=_completion_timeout) as resp:
                 if resp.status == 200:
                     响应数据 = await resp.json()
                     self.上次usage = 响应数据.get("usage")  # 保存 token 用量（监控指标依赖此字段）
@@ -1285,7 +1363,8 @@ class AICoderClient:
             logger.exception(f"[代码补全] 未预期异常: {e}")
             return ""
 
-    async def 流式对话(self, messages: list, settings: dict, tools=None, tool_executor=None):
+    async def 流式对话(self, messages: list, settings: dict, tools=None, tool_executor=None,
+                     response_format=None):
         """流式对话 - yield 每个 token chunk
 
         Args:
@@ -1293,16 +1372,20 @@ class AICoderClient:
             settings: 设置字典
             tools: OpenAI 风格的工具描述列表，传 None 时与原版行为一致
             tool_executor: async 回调 (tool_name, tool_args) -> str
+            response_format: P1-1 原生 JSON Output，仅能力表内模型透传
         """
         model_source = settings.get("model_source", "api")
         if model_source == "local":
             # 本地模式不在此客户端处理，由外部分发
             yield "[错误] API客户端不支持本地模式流式对话"
         else:
-            async for chunk in self._api_流式对话(messages, settings, tools=tools, tool_executor=tool_executor):
+            async for chunk in self._api_流式对话(messages, settings, tools=tools,
+                                              tool_executor=tool_executor,
+                                              response_format=response_format):
                 yield chunk
 
-    async def _api_流式对话(self, messages: list, settings: dict, tools=None, tool_executor=None):
+    async def _api_流式对话(self, messages: list, settings: dict, tools=None, tool_executor=None,
+                          response_format=None):
         """API 模式流式对话 - OpenAI 兼容 SSE 格式
 
         在请求 body 中设置 stream: true，逐行解析 SSE data。
@@ -1383,46 +1466,39 @@ class AICoderClient:
         _连续空转轮数 = 0     # 本轮工具调用全部被强制复用（无实际执行）的连续轮数
         _曾输出正文 = False   # 跨轮标记：此前轮次是否输出过叙述文本（轮间分隔用）
         _上次重提文本 = ""    # 纯文本重提后上一次的输出（重复总结检测用）
+        _续写走beta = False   # P1-2：DeepSeek prefix 续写时下一轮请求切到 /beta 端点
+        _续写禁用tools = False  # P1-2：DeepSeek prefix 与 tools 官方互斥，该轮请求不带 tools
 
         for 工具轮次 in range(最大工具循环次数):
             # 动态窗口控制
             _estimated = self._estimate_tokens(prepared_messages)
             _limit = self._get_model_context_limit(model_name)
 
-            # 禁用提案3：首轮后剥离工具指南会改变 system 前缀，破坏前缀缓存稳定化（P0-1），
-            # 前缀缓存命中收益大于剥离节省的 ~3000 字符，保持系统提示全程不变
-            # if 工具轮次 == 1:
-            #     prepared_messages = self._剥离工具指南(prepared_messages)
-
-            # 禁用提案1：不再主动压缩旧工具轮次，保持完整工具执行历史避免智能体遗忘
-            # if 工具轮次 >= 3:
-            #     prepared_messages = self._主动压缩旧工具轮次(prepared_messages)
-
-            # 禁用提案4：不再触发阶段压缩，保持完整上下文避免智能体反复执行相同操作
-            # if 工具轮次 >= 7:
-            #     prepared_messages = self._尝试阶段压缩(prepared_messages, 工具轮次)
-
-            # 动态窗口控制（仅压缩工具结果文本，不删除工具消息对）
-            _estimated = self._estimate_tokens(prepared_messages)
+            # 注：提案1/3/4（剥离工具指南/主动压缩旧轮次/阶段压缩）已删除：
+            # 均会改写已发送的历史消息，与 append-only 前缀缓存稳定化直接冲突
 
             _发生压缩 = False
-            if _estimated > _limit * 0.90:
+            if _estimated > _limit * 0.95:
                 prepared_messages = self._compress_tool_messages(prepared_messages)
                 logger.warning(f"[动态窗口] token预估({_estimated})接近上限({_limit})，已压缩工具消息文本")
                 _estimated = self._estimate_tokens(prepared_messages)
                 _发生压缩 = True
 
             # 兜底：压缩后仍超限 → 逐对删除最早的工具消息对，防止上下文无限膨胀
+            # P0-2：阈值 0.95→0.98，删除历史会废掉全部前缀缓存并直接失忆，尽量晚触发
             _drop次数 = 0
-            while _estimated > _limit * 0.95 and _drop次数 < 20:
-                _新消息 = self._drop_oldest_tool_pairs(prepared_messages)
+            while _estimated > _limit * 0.98 and _drop次数 < 20:
+                _新消息 = self._drop_oldest_tool_pairs(prepared_messages, model_name, _limit)
                 if len(_新消息) == len(prepared_messages):
                     break
                 prepared_messages = _新消息
                 _estimated = self._estimate_tokens(prepared_messages)
                 _drop次数 += 1
             if _drop次数:
-                logger.warning(f"[动态窗口] 压缩后仍超限，已删除最早的 {_drop次数} 组工具消息对，当前预估 {_estimated}")
+                logger.error(
+                    f"[动态窗口] 压缩后仍超限，已删除最早的 {_drop次数} 组工具消息对，当前预估 {_estimated}"
+                    f" | model={model_name}, 上下文窗口={_limit}"
+                )
 
             # P2-12：压缩/删除发生后注入操作台账，防止模型遗忘已完成操作重复执行
             if _发生压缩 or _drop次数:
@@ -1431,10 +1507,28 @@ class AICoderClient:
                     _任务计划容器.get("文本", "")
                 )
 
+            # P1-2 防护：partial/prefix 续写标记官方仅对末条消息有效；
+            # 续写轮之后若还有后续请求轮次，剥掉非末条消息上的标记防 400
+            for _m in prepared_messages[:-1]:
+                if isinstance(_m, dict):
+                    _m.pop("partial", None)
+                    _m.pop("prefix", None)
+
+            # P1-2：DeepSeek 官方拒绝 prefix 与 tools 同时出现（实测返回 400
+            # "Function call should not be used with prefix"），故 prefix 续写轮
+            # 临时不带 tools，续写完成后下一轮自动恢复工具能力
             payload = self._构建请求payload(
                 model_name, prepared_messages, max_tokens, temperature,
-                settings, tools_payload, 工具不支持降级, 流式=True,
+                settings, (None if _续写禁用tools else tools_payload),
+                工具不支持降级, 流式=True,
+                response_format=response_format,
             )
+
+            # P1-2：仅 DeepSeek prefix 续写的下一轮请求走 /beta 端点，主链路不变
+            _本轮请求url = (f"{self._beta端点(base_url)}/chat/completions"
+                          if _续写走beta else url)
+            _续写走beta = False
+            _续写禁用tools = False
 
             tool_calls_accumulator = {}  # {index: {"id":..., "function":{"name":..., "arguments":...}}}
             finish_reason_final = None
@@ -1461,8 +1555,8 @@ class AICoderClient:
                     f"[流式对话] 第{工具轮次+1}轮请求: 消息数={_ctx_msgs}, "
                     f"总字符={_ctx_chars}, timeout={_total_timeout}s"
                 )
-                logger.debug(f"[流式对话] 正在连接 API: {url}, timeout={_total_timeout}s, 工具轮次={工具轮次}")
-                async with 会话.post(url, json=payload, headers=headers,
+                logger.debug(f"[流式对话] 正在连接 API: {_本轮请求url}, timeout={_total_timeout}s, 工具轮次={工具轮次}")
+                async with 会话.post(_本轮请求url, json=payload, headers=headers,
                                     timeout=aiohttp.ClientTimeout(
                                         total=_total_timeout,
                                         sock_connect=_connect_timeout,
@@ -1527,6 +1621,7 @@ class AICoderClient:
                                     if _chunk_usage:
                                         self.上次usage = _chunk_usage
                                         self._校准token估算(prepared_messages, _chunk_usage)
+                                        self._记录缓存命中(_chunk_usage, 工具轮次 + 1)
                                     choice = data_json.get('choices', [{}])[0]
                                     delta = choice.get('delta', {}) or {}
                                     fr = choice.get('finish_reason')
@@ -1686,22 +1781,39 @@ class AICoderClient:
                 and not 工具不支持降级
                 and _截断续写次数 < 2):
                 _截断续写次数 += 1
-                # 如果有部分内容，保留到上下文
-                if assistant_content_buffer.strip():
+                # P1-2：有已输出内容且供应商支持官方续写协议时，用 partial/prefix 标记
+                # 的 assistant 消息承载前缀，模型从断点自然接续，不重复已输出内容
+                _续写风格 = (self._前缀续写能力(model_name)
+                           if assistant_content_buffer.strip() else None)
+                if _续写风格:
+                    _前缀消息 = {"role": "assistant", "content": assistant_content_buffer,
+                               _续写风格: True}
+                    # Kimi 思考模式官方要求续写时带回 reasoning_content
+                    if _续写风格 == "partial" and reasoning_content_buffer:
+                        _前缀消息["reasoning_content"] = reasoning_content_buffer
+                    prepared_messages.append(_前缀消息)
+                    _续写走beta = (_续写风格 == "prefix")  # DeepSeek 下一轮走 /beta
+                    # DeepSeek prefix 与 tools 实测互斥（400），该轮必须去掉 tools；
+                    # Kimi partial 与 tools 实测可共存，保持带 tools 不打断工具循环
+                    _续写禁用tools = (_续写风格 == "prefix")
+                else:
+                    # 无官方协议或无已输出内容：保留现有土办法，行为不变
+                    if assistant_content_buffer.strip():
+                        prepared_messages.append({
+                            "role": "assistant",
+                            "content": assistant_content_buffer,
+                        })
                     prepared_messages.append({
-                        "role": "assistant",
-                        "content": assistant_content_buffer,
+                        "role": "user",
+                        "content": (
+                            "[系统提示] 你的响应被截断了（token不足）。"
+                            "请简洁地继续执行任务，直接调用工具完成修改，不要重复分析。"
+                        )
                     })
-                prepared_messages.append({
-                    "role": "user",
-                    "content": (
-                        "[系统提示] 你的响应被截断了（token不足）。"
-                        "请简洁地继续执行任务，直接调用工具完成修改，不要重复分析。"
-                    )
-                })
                 logger.info(
                     f"[流式工具循环] token截断重试({_截断续写次数}/2): "
-                    f"finish_reason=length, content_len={len(assistant_content_buffer)}"
+                    f"finish_reason=length, content_len={len(assistant_content_buffer)}, "
+                    f"续写方式={_续写风格 or '土办法'}"
                 )
                 yield "\n[自动继续执行...]\n"
                 continue
@@ -1792,13 +1904,23 @@ class AICoderClient:
         return has_read and not has_write
 
     def 获取性能报告(self) -> dict:
-        """返回 API 调用性能统计"""
+        """返回 API 调用性能统计（含 P0-3 前缀缓存累计命中率）"""
         return {
             "总请求数": self._性能.总请求数,
             "成功数": self._性能.成功数,
             "失败数": self._性能.失败数,
             "平均响应时间(秒)": round(self._性能.平均响应时间, 2),
             "最近请求数": len(self._性能._响应时间列表),
+            "缓存累计命中tokens": self._缓存累计命中tokens,
+            "缓存累计输入tokens": self._缓存累计输入tokens,
+            "缓存累计命中率(%)": round(
+                self._缓存累计命中tokens / max(self._缓存累计输入tokens, 1) * 100, 1
+            ),
+            # 总计会被多模型混算稀释，同时给出每个模型的单独命中率
+            "缓存分模型命中率(%)": {
+                模型: round(命中 / max(输入, 1) * 100, 1)
+                for 模型, (命中, 输入) in self._缓存分模型统计.items()
+            },
         }
 
 

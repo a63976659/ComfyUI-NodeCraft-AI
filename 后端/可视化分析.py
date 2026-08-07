@@ -452,7 +452,9 @@ async def _call_ai_for_function_mode(prompt: str, llm_client, local_model_client
     else:
         if llm_client is None:
             raise RuntimeError("API 模型客户端未初始化")
-        async for chunk in llm_client.流式对话(messages, viz_settings):
+        async for chunk in llm_client.流式对话(
+            messages, viz_settings, response_format={"type": "json_object"}
+        ):
             full_text += chunk
 
     return full_text

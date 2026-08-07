@@ -12,7 +12,7 @@ from aiohttp import web
 
 from .性能监控 import get_metrics_collector
 from .接口文档 import docs_page, openapi_json
-from .路由公共 import _分页参数, _分页响应
+from .路由公共 import _分页参数, _分页响应, llm_client, local_model_client
 
 
 async def get_audit_logs(request):
@@ -38,9 +38,22 @@ async def get_audit_logs(request):
 
 
 async def metrics_handler(request):
-    """获取性能指标"""
+    """获取性能指标（含两个模型客户端的推理统计）"""
     collector = get_metrics_collector()
-    return web.json_response({"success": True, "data": collector.get_metrics()})
+    data = collector.get_metrics()
+    # P0-3 前缀缓存可观测：累计命中率原本只能从日志看，挂到已有只读端点上
+    if llm_client is not None:
+        try:
+            data["llm客户端"] = llm_client.获取性能报告()
+        except Exception:
+            pass  # 监控端点不能因统计取数失败而不可用
+    # 本地推理统计同为纯内存读取（poll() 只探活，不会拉起 worker）
+    if local_model_client is not None:
+        try:
+            data["本地模型客户端"] = local_model_client.获取性能报告()
+        except Exception:
+            pass
+    return web.json_response({"success": True, "data": data})
 
 
 def register_审计与文档路由(routes):
