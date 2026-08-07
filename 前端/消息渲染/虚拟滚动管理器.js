@@ -38,7 +38,12 @@ export class 虚拟滚动管理器 {
                         const 新高度 = entry.target.offsetHeight;
                         if (新高度 > 0 && this.已测量高度.get(index) !== 新高度) {
                             this.已测量高度.set(index, 新高度);
-                            需要更新 = true;
+                            // 编辑中的气泡（行内 textarea）只更新高度缓存，不触发可视区重渲染：
+                            // 重渲染会回收并重建该气泡，编辑器刚展开就被销毁（表现为展开编辑立刻收起的闪烁）。
+                            // 编辑确认后会走 截断消息() 整体重渲染，取消后高度恢复会再次正常触发更新
+                            if (!entry.target.classList.contains("nca-msg-editing")) {
+                                需要更新 = true;
+                            }
                         }
                     }
                 }

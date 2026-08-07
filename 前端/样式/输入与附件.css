@@ -117,6 +117,18 @@
     border-color: var(--nca-accent);
 }
 
+/* 思考开关按钮：同样复用释放显存按钮外观。显式开启走 accent 高亮，
+   显式关闭走 warning 色，与“跟随服务端默认”的无色态三态可区分 */
+.nca-thinking-btn.active {
+    color: var(--nca-accent);
+    border-color: var(--nca-accent);
+}
+
+.nca-thinking-btn.off {
+    color: var(--nca-warning);
+    border-color: var(--nca-warning);
+}
+
 .nca-unload-btn:disabled {
     cursor: not-allowed;
     opacity: 0.6;

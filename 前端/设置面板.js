@@ -244,6 +244,7 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
             // 旧顶层值为历史默认 4096 时视为未设置，让模型推荐默认值生效
             max_tokens: (s.max_tokens && s.max_tokens !== 4096) ? s.max_tokens : null,
             reasoning_effort: s.reasoning_effort || null,
+            thinking_mode: s.thinking_mode || null,
         });
     }
     let 当前配置ID = 配置列表.some((p) => p.id === s.active_api_profile_id)
@@ -275,7 +276,7 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
         // 空值/非法值存 null（保存/切换时自动采用模型推荐默认值），合法值限幅到 1024~模型输出上限
         const mt = parseInt(apiMaxTokensInput.value, 10);
         p.max_tokens = Number.isFinite(mt) && mt > 0 ? Math.min(Math.max(mt, 1024), 模型MaxTokens上限(apiModelInput.value.trim())) : null;
-        // 思考深度（reasoning_effort）改由模型切换栏按钮调节，此处不再读写，保留配置已存值
+        // 思考深度（reasoning_effort）与思考开关（thinking_mode）改由模型切换栏按钮调节，此处不再读写，保留配置已存值
         p.name = 配置名称Input.value.trim() || p.model_name || t("settings.unnamed_profile");
     }
 
@@ -1118,6 +1119,7 @@ export async function 显示设置面板(rootContainer, 更新状态栏Fn) {
             model_name: 激活配置.model_name,
             max_tokens: 激活配置.max_tokens || 模型默认MaxTokens(激活配置.model_name),
             reasoning_effort: 激活配置.reasoning_effort || "",
+            thinking_mode: 激活配置.thinking_mode || "",
             github_token: githubTokenInput.value.trim(),
             github_username: githubUserInput.value.trim(),
             github_visibility: panel.querySelector('input[name="github_visibility"]:checked')?.value || "public",
