@@ -16,12 +16,6 @@ const 复杂度文字 = {
     complex: "复杂",
 };
 
-// 有问题时倒计时更长（需用户决策）；无问题时更短（仅确认）
-const 倒计时秒数 = {
-    有问题: 30,
-    无问题: 5,
-};
-
 // ═══════════════════════════════════════════════════════════════
 //  导出：渲染规划面板
 // ═══════════════════════════════════════════════════════════════
@@ -50,10 +44,7 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
     const 有问题 = 问题列表.length > 0;
 
     // ─── 内部状态 ────────────────────────────────────────────────
-    let 已完成 = false;                 // 是否已确认/跳过/自动执行（防重复）
-    let 倒计时id = null;                 // setInterval 句柄
-    const 总秒数 = 有问题 ? 倒计时秒数.有问题 : 倒计时秒数.无问题;
-    let 剩余秒数 = 总秒数;
+    let 已完成 = false;                 // 是否已确认/跳过（防重复）
     const 问题状态 = [];                 // 每个问题的选中选项索引（null=未选）
 
     // ─── 主面板容器 ──────────────────────────────────────────────
@@ -96,7 +87,7 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
         问题列表.forEach((q, qi) => {
             const 选项组 = Array.isArray(q.options) ? q.options : [];
             const 默认索引 = Number.isInteger(q.default) ? q.default : null;
-            问题状态[qi] = null; // 初始未选，由用户选择或倒计时结束时用默认值
+            问题状态[qi] = null; // 初始未选，由用户选择
 
             const 问题块 = el("div", { class: "nca-planning-question" });
             问题块.appendChild(el("div", {
@@ -118,7 +109,6 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
 
                 单选.addEventListener("change", () => {
                     问题状态[qi] = oi;
-                    用户取消倒计时(); // 用户操作 → 取消自动执行
                 });
 
                 const 选项标签 = el("label", { class: "nca-planning-option" }, [
@@ -133,17 +123,14 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
         面板.appendChild(问题区);
     }
 
-    // ─── 倒计时进度条 ────────────────────────────────────────────
-    const 计时填充 = el("div", { class: "nca-planning-timer-fill" });
-    const 计时文字 = el("div", {
-        class: "nca-planning-timer-text",
-        text: `${剩余秒数}秒后自动执行...`,
-    });
-    const 计时器区 = el("div", { class: "nca-planning-timer" }, [
-        计时文字,
-        el("div", { class: "nca-planning-timer-bar" }, [计时填充]),
+    // ─── 等待确认提示（确认面板一律停下等待用户操作，不再倒计时自动执行）─────
+    const 等待提示区 = el("div", { class: "nca-planning-timer" }, [
+        el("div", {
+            class: "nca-planning-timer-text",
+            text: "⏸ 已暂停执行：点击下方按钮后才会开始",
+        }),
     ]);
-    面板.appendChild(计时器区);
+    面板.appendChild(等待提示区);
 
     // ─── 按钮区域 ────────────────────────────────────────────────
     const 确认按钮 = el("button", {
@@ -166,20 +153,6 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
 
     // ─── 内部逻辑 ────────────────────────────────────────────────
 
-    // 停止并隐藏倒计时（确认/跳过/自动执行时调用）
-    function 停止倒计时() {
-        if (倒计时id) {
-            clearInterval(倒计时id);
-            倒计时id = null;
-        }
-    }
-
-    // 用户主动操作时取消倒计时并移除进度条
-    function 用户取消倒计时() {
-        停止倒计时();
-        if (计时器区.parentNode) 计时器区.remove();
-    }
-
     // 禁用所有按钮，防止重复点击
     function 禁用按钮() {
         确认按钮.disabled = true;
@@ -187,15 +160,11 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
     }
 
     // 收集用户选择，组装为 {问题文本: 选中选项文本}
-    // 使用默认=true 时，未选问题回退到 default（无 default 则取第 0 项）
-    function 收集选择(使用默认) {
+    function 收集选择() {
         const choices = {};
         问题列表.forEach((q, qi) => {
             const 选项组 = Array.isArray(q.options) ? q.options : [];
-            let idx = 问题状态[qi];
-            if (使用默认 && (idx === null || idx === undefined)) {
-                idx = Number.isInteger(q.default) ? q.default : 0;
-            }
+            const idx = 问题状态[qi];
             if (idx !== null && idx !== undefined && 选项组[idx] !== undefined) {
                 choices[q.question] = 选项组[idx];
             }
@@ -203,12 +172,12 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
         return choices;
     }
 
-    // 确认执行（使用默认=true 表示倒计时自动触发）
-    function 处理确认(使用默认) {
+    // 确认执行
+    function 处理确认() {
         if (已完成) return;
 
-        // 手动确认时校验必选问题是否已全部选择
-        if (有问题 && !使用默认) {
+        // 校验必选问题是否已全部选择
+        if (有问题) {
             const 未选 = 问题列表.some((q, qi) => 问题状态[qi] === null || 问题状态[qi] === undefined);
             if (未选) {
                 Toast.warning("请先选择所有需要确认的选项");
@@ -216,10 +185,8 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
             }
         }
 
-        const choices = 收集选择(使用默认);
+        const choices = 收集选择();
         已完成 = true;
-        停止倒计时();
-        用户取消倒计时();
         禁用按钮();
         面板.classList.add("nca-planning-done");
         try {
@@ -233,8 +200,6 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
     function 处理跳过() {
         if (已完成) return;
         已完成 = true;
-        停止倒计时();
-        用户取消倒计时();
         禁用按钮();
         面板.classList.add("nca-planning-done");
         try {
@@ -244,32 +209,10 @@ export function 渲染规划面板(容器, 规划数据, 选项) {
         }
     }
 
-    // 更新倒计时显示
-    function 更新计时显示() {
-        计时文字.textContent = `${剩余秒数}秒后自动执行...`;
-        const 百分比 = Math.max(0, (剩余秒数 / 总秒数) * 100);
-        计时填充.style.width = `${百分比}%`;
-    }
-
-    // 启动倒计时
-    function 启动倒计时() {
-        更新计时显示();
-        倒计时id = setInterval(() => {
-            剩余秒数 -= 1;
-            if (剩余秒数 <= 0) {
-                停止倒计时();
-                处理确认(true); // 倒计时结束 → 使用默认选项自动确认
-                return;
-            }
-            更新计时显示();
-        }, 1000);
-    }
-
     // ─── 绑定按钮事件 ────────────────────────────────────────────
-    确认按钮.addEventListener("click", () => 处理确认(false));
+    确认按钮.addEventListener("click", 处理确认);
     if (跳过按钮) 跳过按钮.addEventListener("click", 处理跳过);
 
-    // ─── 挂载并启动倒计时 ────────────────────────────────────────
+    // ─── 挂载（确认面板一律停下等待用户点击，不自动执行）──────────
     容器.appendChild(面板);
-    启动倒计时();
 }
