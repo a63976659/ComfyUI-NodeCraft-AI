@@ -88,6 +88,7 @@ _TOOL_INSTRUCTION_TEMPLATE = """
 3. `write_plugin_file` - 写入完整文件内容（参数：file_path, content）
 4. `edit_file` - 增量编辑文件（参数：file_path, patch。patch 为 unified diff 补丁）
 5. `batch_edit` - 批量操作多个文件（参数：operations 数组，每个元素含 action/file_path/content）
+6. `ask_user` - 向用户提问并等待回答（参数：question；仅限需求不明确必须用户拍板时使用，调用后必须立即停止输出，严禁自行假设答案）
 
 ### ⚠️ 严格格式要求（必读，违反将导致调用失败）
 

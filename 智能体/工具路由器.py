@@ -387,6 +387,29 @@ FILE_TOOLS = [
             },
             "required": ["profiling_data"]
         }
+    },
+    {
+        "name": "ask_user",
+        "description": (
+            "向用户提出一个必须由用户本人回答的问题。调用后必须立即结束本回合等待用户回复，"
+            "严禁自行假设答案或继续调用其他工具。仅在需求不明确、存在多种方向且必须由用户拍板时使用；"
+            "可自行解决的技术问题不要使用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "要问用户的问题（简洁明确，一句话）"
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选的候选选项列表，供用户快速选择（2-4 个，可不提供）"
+                }
+            },
+            "required": ["question"]
+        }
     }
 ]
 
@@ -395,7 +418,7 @@ FILE_TOOLS = [
 _READONLY_TOOL_NAMES = {
     "read_plugin_file", "search_plugin_file", "list_plugin_files",
     "grep_plugin_files", "find_plugin_files", "check_python_syntax",
-    "analyze_profiling",
+    "analyze_profiling", "ask_user",
 }
 
 
@@ -765,6 +788,14 @@ async def 执行工具(tool_name: str, tool_args: dict, plugin_path: str) -> str
     # Profiling 分析不读写插件文件，放在 plugin_path 校验之前
     if tool_name == "analyze_profiling":
         return await _执行Profiling分析(tool_args or {})
+
+    # ask_user 正常由聊天路由的 tool_executor 闭包拦截（推送事件并结束流），
+    # 这里是兜底分支：防止其他调用路径（如 WebSocket）直达时崩溃
+    if tool_name == "ask_user":
+        return (
+            "[ask_user] 问题已提交给用户，正在等待用户回复。"
+            "请立即结束本回合，不要再调用任何工具，也不要自行假设答案。"
+        )
 
     if not plugin_path:
         return "❌ 错误：未指定插件路径（plugin_path 为空），无法执行文件操作。"

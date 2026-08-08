@@ -157,6 +157,41 @@ def _检测写意图(messages: list) -> bool:
     )
 
 
+def _文本是否向用户提问(text: str) -> bool:
+    """检测模型回复文本中是否包含对用户的提问（中英双语）。
+
+    模型提问时应当结束回合等待用户真实回复，禁止强制重提/续跑
+    （否则注入的系统提醒会把模型推向自问自答后继续执行）。
+    只扫描文本尾部 500 字符：对用户的提问几乎总在回复末尾，
+    正文中的代码片段/URL 含 "?" 会误报。
+    """
+    文本 = (text or "").strip()[-500:]
+    if not 文本:
+        return False
+    小写 = 文本.lower()
+    # 信号1a：中文显式疑问句式（不依赖标点，部分模型提问不带标点）
+    if re.search(
+        r"(请问|请确认|请选择|请告知|是否继续|要不要|需不需要|需要我|您想|你想|您希望|你希望)",
+        文本,
+    ):
+        return True
+    # 信号1b：英文显式疑问句式（同样不依赖标点）
+    if re.search(
+        r"\b(would you like|do you want|do you prefer|should i|shall i|please "
+        r"(confirm|choose|select|let me know|tell me)|let me know (which|if|whether|what)|"
+        r"which (option|one|approach)|please advise)",
+        小写,
+    ):
+        return True
+    # 信号2a：中文问号 + 疑问语气词共现（防代码三元运算/URL 中的 ? 单独误报）
+    if ("?" in 文本 or "？" in 文本) and re.search(
+        r"(吗|呢|哪|什么|如何|怎么|谁|多少)[^。\.\n]{0,10}[?？]", 文本):
+        return True
+    # 信号2b：问号置于尾部（英文疑问句的标准形态；代码/URL 的 ? 不会出现在回复末尾）
+    if re.search(r"[?？][\s”\")）'\]]{0,4}$", 文本):
+        return True
+    return False
+
 
 class AICoderClient:
     """OpenAI 兼容 API 客户端（支持续写、重试、JSON修复、流式输出）
@@ -1833,6 +1868,11 @@ class AICoderClient:
                 and assistant_content_buffer.strip()  # 确实有内容输出
                 and _可用写工具  # 存在写入工具（只读模式下纯文本为正常结束）
                 and _检测写意图(prepared_messages)):  # 用户消息含修改意图（纯问答不重提）
+                # 停下等待保护：模型文本向用户提问 → 视为等待用户回复，正常结束回合；
+                # 禁止强制重提，否则注入的系统提醒会把模型推向自问自答后继续执行
+                if _文本是否向用户提问(assistant_content_buffer):
+                    logger.info("[流式工具循环] 纯文本重提跳过: 模型输出含对用户的提问，结束回合等待回复")
+                    return
                 # 重复总结检测：本次输出与上次重提后的输出开头几乎一致，说明模型
                 # 坚持认为任务已完成、再提只会逗它复述一遍总结 → 视为正常结束
                 _本次文本 = assistant_content_buffer.strip()
@@ -1868,6 +1908,7 @@ class AICoderClient:
                 and not 工具不支持降级
                 and _可用写工具  # 存在写入工具（只读模式下读完即答是正常行为）
                 and _检测写意图(prepared_messages)  # 用户消息含修改意图（纯问答不续跑）
+                and not _文本是否向用户提问(assistant_content_buffer)  # 模型在提问则等待用户回复，不续跑
                 and self._should_auto_continue(prepared_messages)):
                 _只读续跑次数 += 1
                 prepared_messages.append({

@@ -144,26 +144,41 @@ async def _带首块心跳(源生成器, 发送心跳, 心跳间隔=_心跳间�
 
 
 def _build_tool_executor(plugin_path, tool_tracker: list = None, active_tab: str = "develop"):
-    """构建绑定 plugin_path 的 tool_executor 闭包；不可用时返回 (None, None)
+    """构建绑定 plugin_path 的 tool_executor 闭包；不可用时返回 (None, None, None)
 
     Args:
         plugin_path: 插件路径
         tool_tracker: 可选的工具调用追踪列表，传入后每次工具执行都会追加工具名
         active_tab: 当前 Tab，用于工具 schema 裁剪（visualize 仅下发只读工具）
+
+    Returns:
+        (file_tools, _tool_executor, ask_user容器)：ask_user容器 用于承载模型
+        通过 ask_user 工具提出的问题（调用方据此推送事件并结束流）
     """
     if not plugin_path or _执行工具 is None or tool_router is None:
-        return None, None
+        return None, None, None
     try:
         file_tools = tool_router.get_file_tools(active_tab=active_tab)
     except Exception as e:
         logger.exception(f"获取文件工具定义失败: {e}")
-        return None, None
+        return None, None, None
 
     plugin_path_str = str(plugin_path)
+    ask_user容器 = {}  # {"question": str, "options": list}，ask_user 拦截后填充
 
     async def _tool_executor(tool_name: str, tool_args: dict) -> str:
         if tool_tracker is not None:
             tool_tracker.append(tool_name)
+        # ask_user 拦截：不实际执行，仅记录问题；调用方检测到容器被填充后
+        # 推送 ask_user 事件并硬停流，等待用户真实回复（对标 AskUserQuestion）
+        if tool_name == "ask_user":
+            ask_user容器["question"] = str((tool_args or {}).get("question", "")).strip()
+            ask_user容器["options"] = [str(o) for o in ((tool_args or {}).get("options") or []) if str(o).strip()]
+            logger.info(f"[ask_user] 模型向用户提问：{ask_user容器['question'][:80]}")
+            return (
+                "[ask_user] 问题已提交给用户，正在等待用户回复。"
+                "请立即结束本回合，不要再调用任何工具，也不要自行假设答案。"
+            )
         _工具开始 = time.time()
         try:
             _结果 = await _执行工具(tool_name, tool_args, plugin_path_str)
@@ -174,7 +189,7 @@ def _build_tool_executor(plugin_path, tool_tracker: list = None, active_tab: str
             记录工具调用(tool_name, tool_args, _错误文本, 耗时秒=time.time() - _工具开始, 是否异常=True)
             return _错误文本
 
-    return file_tools, _tool_executor
+    return file_tools, _tool_executor, ask_user容器
 
 
 # ─── 两个聊天 handler 的公共逻辑（预校验/上下文/保存回复） ─────
@@ -444,20 +459,25 @@ async def handle_chat(request):
 
             logger.debug(f"[工具调用] 非流式分支检查 - plugin_path={plugin_path}")
             if plugin_path:
-                file_tools, _tool_executor = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
+                file_tools, _tool_executor, _ask容器 = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
                 reply_content = await local_model_client.generate_response_with_tools(
                     system_prompt, history_to_send, tools=file_tools, tool_executor=_tool_executor
                 )
             else:
+                _ask容器 = None
                 reply_content = await local_model_client.generate_response(system_prompt, history_to_send)
         else:
             # API 模式：如插件路径有效则传递 tools/tool_executor，启用 Function Calling
-            file_tools, _tool_executor = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
+            file_tools, _tool_executor, _ask容器 = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
             reply_content = await llm_client.generate_response(
                 system_prompt, history_to_send,
                 tools=file_tools,
                 tool_executor=_tool_executor,
             )
+
+        # ask_user 补充：确保提问文本出现在回复中（下一轮上下文需包含问题）
+        if _ask容器 and _ask容器.get("question") and _ask容器["question"] not in reply_content:
+            reply_content += f"\n\n❓ {_ask容器['question']}"
 
         # 记录模型推理指标
         try:
@@ -656,6 +676,8 @@ async def handle_chat_stream(request):
 
         # 工具调用追踪列表（用于工作模式提取）
         _tool_call_sequence = []
+        # ask_user 容器（tool_executor 拦截到 ask_user 后填充，触发硬停流）
+        _ask容器 = None
 
         # SSE 状态事件写出（inference_start 与 thinking 心跳共用，同协程顺序写入）
         async def _推送状态事件(payload):
@@ -698,7 +720,7 @@ async def handle_chat_stream(request):
                 await _推送推理开始(Path(local_path).name)
 
                 if plugin_path and plugin_path.exists():
-                    file_tools, _tool_executor = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
+                    file_tools, _tool_executor, _ask容器 = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
                     async for chunk in _带首块心跳(local_model_client.流式对话_with_tools(
                         complete_messages, settings, tools=file_tools, tool_executor=_tool_executor
                     ), _推送状态事件):
@@ -708,6 +730,9 @@ async def handle_chat_stream(request):
                             full_reply += chunk
                         chunk_data = _serialize_chunk(事件)
                         await response.write(f"data: {chunk_data}\n\n".encode('utf-8'))
+                        # ask_user 触发 → 立即中断消费（_带首块心跳 finally 会关闭源生成器）
+                        if _ask容器 and _ask容器.get("question"):
+                            break
                 else:
                     async for chunk in _带首块心跳(
                         local_model_client.流式对话(complete_messages, settings), _推送状态事件
@@ -721,7 +746,7 @@ async def handle_chat_stream(request):
                 logger.debug(f"[聊天路由] 发送消息总字符数: {_total_chars}, 消息数: {len(complete_messages)}")
                 if _total_chars > 50000:
                     logger.warning(f"[聊天路由] 消息总字符数({_total_chars})过大，可能超出模型上下文窗口")
-                file_tools, _tool_executor = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
+                file_tools, _tool_executor, _ask容器 = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
                 # 即将发起模型流式调用：推送推理开始事件（前端显示状态行）
                 await _推送推理开始(settings.get("model", ""))
                 async for chunk in _带首块心跳(llm_client.流式对话(
@@ -735,6 +760,34 @@ async def handle_chat_stream(request):
                         full_reply += chunk
                     chunk_data = _serialize_chunk(事件)
                     await response.write(f"data: {chunk_data}\n\n".encode('utf-8'))
+                    # ask_user 触发 → 立即中断消费（_带首块心跳 finally 会关闭源生成器）
+                    if _ask容器 and _ask容器.get("question"):
+                        break
+
+            # === ask_user 硬停：模型调用 ask_user 向用户提问 → 结束流等待用户真实回复 ===
+            # 与规划确认同源模式：推送结构化事件后 return，用户的回复作为普通新消息进入下一轮
+            if _ask容器 and _ask容器.get("question"):
+                _ask_question = _ask容器["question"]
+                if _ask_question not in full_reply:
+                    full_reply += f"\n\n❓ {_ask_question}"
+                if full_reply:
+                    clean_reply = re.sub(r'<thinking>[\s\S]*?</thinking>', '', full_reply).strip()
+                    try:
+                        记录AI输出(session_id, clean_reply, 耗时秒=time.time() - _start,
+                                   token数=_提取推理token数(model_source))
+                    except Exception:
+                        pass
+                    await _保存回复并提取记忆(
+                        session_id, session_data, clean_reply, user_message,
+                        plugin_path, _tool_call_sequence, 任务名="跨会话记忆提取(流式)",
+                    )
+                await _安全推送规划事件({
+                    "type": "ask_user",
+                    "question": _ask_question,
+                    "options": _ask容器.get("options") or [],
+                    "done": True,
+                })
+                return response
 
             # 记录模型推理指标
             try:
