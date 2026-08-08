@@ -427,3 +427,55 @@
         text-align: center;
     }
 }
+
+/* ─── ask_user 提问面板（模型停下等待用户回答）────────────────────── */
+.nca-ask-user-panel {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--nca-border, rgba(255, 255, 255, 0.12));
+    border-radius: 10px;
+    background: var(--nca-panel-bg, rgba(255, 255, 255, 0.04));
+}
+
+.nca-ask-user-question {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: var(--nca-text, #e6e6e6);
+}
+
+.nca-ask-user-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.nca-ask-user-option-btn {
+    padding: 6px 14px;
+    border: 1px solid var(--nca-accent, #5b9fff);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--nca-accent, #5b9fff);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nca-ask-user-option-btn:hover {
+    background: var(--nca-accent, #5b9fff);
+    color: #ffffff;
+}
+
+.nca-ask-user-option-btn:disabled {
+    border-color: #555;
+    color: #888;
+    cursor: not-allowed;
+    background: transparent;
+}
+
+.nca-ask-user-hint {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--nca-text-dim, #9aa0a6);
+}

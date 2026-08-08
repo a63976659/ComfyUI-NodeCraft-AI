@@ -418,7 +418,8 @@ export async function 切换会话(id) {
         if (thisAbort.signal.aborted) return; // 已被更新的切换覆盖
         状态.当前消息列表 = data.messages || [];
         状态.消息起始偏移 = data.start_index || 0;
-        事件总线.emit(事件.消息列表更新, 状态.当前消息列表);
+        // 强制到底=true：切换会话一次性定位，区别于会话内前插重渲染
+        事件总线.emit(事件.消息列表更新, 状态.当前消息列表, { 强制到底: true });
     } catch (e) {
         if (thisAbort.signal.aborted) return; // 已被更新的切换覆盖
         console.error("[节点梦工厂] 加载消息失败:", e);
@@ -451,7 +452,8 @@ export async function 加载会话消息(sessionId) {
         const data = await 请求("GET", `/sessions/${sessionId}/messages?recent=1`);
         状态.当前消息列表 = data.messages || [];
         状态.消息起始偏移 = data.start_index || 0;
-        事件总线.emit(事件.消息列表更新, 状态.当前消息列表);
+        // 强制到底=true：进入会话一次性定位，区别于会话内前插重渲染
+        事件总线.emit(事件.消息列表更新, 状态.当前消息列表, { 强制到底: true });
     } catch (e) {
         console.error("[节点梦工厂] 加载消息失败:", e);
         状态.当前消息列表 = [];

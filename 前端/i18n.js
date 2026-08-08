@@ -223,6 +223,7 @@ const 语言包 = {
         'chat.no_messages':     '暂无消息记录',
         'chat.edit_regen':      '编辑并重新生成',
         'chat.confirm_regen':   '确认并重新生成',
+        'chat.ask_user_hint':   '⏸ 已暂停：点击选项直接回复，或在下方输入框输入你的回答',
         'chat.empty_content':   '消息内容不能为空',
         'chat.role_user':       '用户',
         'chat.attachment':      '附件',
@@ -344,6 +345,8 @@ const 语言包 = {
         'chat.qa_io_types_prompt': '请讲解 V3 节点的输入与输出定义方式：常用 Widget 输入类型、可选输入与隐藏输入、NodeOutput 返回值与 UI 预览，每种给一个最小可运行示例。',
         'chat.qa_image_loader': '带预览的图像加载器',
         'chat.qa_image_loader_prompt': '我想做一个带前端效果的图像加载器节点：在节点上预览 ComfyUI input 输入文件夹里的所有图片，单击选定，节点输出就是选定的那张图像；前端随节点缩放跟随缩放，预览图也同步缩放，但始终保持每排 5 个。请你给我一个完整的实现方案。',
+        'chat.qa_planning':     '大项目先做规划',
+        'chat.qa_planning_prompt': '请先规划一下这个任务：（在这里描述你的大项目需求，例如：重构某个模块 / 新增一组功能）。先输出执行计划、步骤与风险，等我确认后再开始执行。',
 
         // ── 可视化容器 ───────────────────────────────────
         'visual.container_title': '可视化效果',
@@ -761,6 +764,7 @@ const 语言包 = {
         'chat.no_messages':     'No messages yet',
         'chat.edit_regen':      'Edit & regenerate',
         'chat.confirm_regen':   'Confirm & regenerate',
+        'chat.ask_user_hint':   '⏸ Paused: click an option to reply directly, or type your answer in the input box below',
         'chat.empty_content':   'Message cannot be empty',
         'chat.role_user':       'User',
         'chat.attachment':      'Attachment',
@@ -882,6 +886,8 @@ const 语言包 = {
         'chat.qa_io_types_prompt': 'Explain how V3 node inputs and outputs are defined: common widget input types, optional and hidden inputs, NodeOutput return values and UI previews. Give a minimal runnable example for each.',
         'chat.qa_image_loader': 'Image loader with previews',
         'chat.qa_image_loader_prompt': 'I want an image loader node with a frontend UI: preview every image in the ComfyUI input folder right on the node, click one to select it, and the node outputs that selected image. The frontend should scale with the node — previews resize together with it while always keeping 5 per row. Please give me a complete implementation plan.',
+        'chat.qa_planning':     'Plan first for big projects',
+        'chat.qa_planning_prompt': 'Please plan this task first: (describe your big project here, e.g. refactor a module / add a set of features). Show me the execution plan, steps and risks, and wait for my confirmation before executing.',
 
         // ── Visualization container ──────────────────────
         'visual.container_title': 'Visualization',

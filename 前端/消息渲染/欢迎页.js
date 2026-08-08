@@ -22,6 +22,8 @@ export function 渲染欢迎页(container, refs) {
             创建快捷操作("▸", t("chat.qa_howto"), () => 快捷输入(refs, t("chat.qa_howto_prompt"))),
             创建快捷操作("⬡", t("chat.qa_io_types"), () => 快捷输入(refs, t("chat.qa_io_types_prompt"))),
             创建快捷操作("⧉", t("chat.qa_image_loader"), () => 快捷输入(refs, t("chat.qa_image_loader_prompt"))),
+            // 新手引导入口：prompt 内嵌预筛选直接触发词（规划一下/plan），可靠命中规划机制
+            创建快捷操作("📋", t("chat.qa_planning"), () => 快捷输入(refs, t("chat.qa_planning_prompt"))),
         ]),
     ]);
     container.appendChild(welcome);

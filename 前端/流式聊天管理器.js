@@ -322,6 +322,24 @@ export async function 创建流式聊天(options) {
                             return 结果;
                         }
 
+                        // ── ask_user 事件：模型向用户提问，结束流等待用户真实回复 ──
+                        if (data.type === 'ask_user') {
+                            _清理推理状态();
+                            const 结果 = {
+                                fullContent: fullContent || "",
+                                hasError: false,
+                                isAbort: false,
+                                连接中断: false,
+                                type: "ask_user",
+                                question: data.question || "",
+                                options: Array.isArray(data.options) ? data.options : []
+                            };
+                            if (完成回调) {
+                                完成回调(结果);
+                            }
+                            return 结果;
+                        }
+
                         if (data.type === 'billing') {
                             // 本地 API Key 直连后不再处理后端 billing 事件（后端已不再发送）
                             continue;

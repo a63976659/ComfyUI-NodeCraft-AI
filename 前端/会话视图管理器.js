@@ -898,7 +898,7 @@ export function renderSidebarUI(container) {
     // 仅保留消息渲染、状态栏与发送态等与会话视图协调器自身职责相关的全局事件。
     function 绑定全局事件() {
         _追踪订阅(事件.会话切换, () => { /* 状态栏由 切换会话 内部更新为"加载会话..." */ });
-        _追踪订阅(事件.消息列表更新, (messages) => { 渲染所有消息(refs, messages); 更新状态栏("就绪"); });
+        _追踪订阅(事件.消息列表更新, (messages, opts) => { 渲染所有消息(refs, messages, opts); 更新状态栏("就绪"); });
         _追踪订阅(事件.新消息追加, (msg) => { 移除加载动画(refs); 追加消息DOM(refs, msg); });
         _追踪订阅(事件.发送状态变更, (isSending) => { refs.输入框.disabled = isSending; refs.发送按钮.disabled = isSending; if (isSending && !refs.消息区域.querySelector('#nca-loader') && !refs.消息区域.querySelector('.nca-streaming-cursor')) 显示加载动画(refs); });
         _追踪订阅(事件.状态栏更新, (text) => 更新状态栏(text));

@@ -1167,6 +1167,40 @@ export function 创建行内编辑器(msgEl, 初始内容, { onCancel, onConfirm
     });
 }
 
+/**
+ * 创建 ask_user 提问面板（问题 + 可选选项按钮 + 暂停提示）。
+ * 主聊天与三面板（开发/优化/可视化）路径复用同一渲染实现，
+ * 保证三个界面的结构化提问行为完全一致。
+ * 全部 textContent 赋值防注入；选项点击后防重复并禁用全部按钮。
+ * @param {Object} 提问数据 - { question: string, options: string[] }
+ * @param {Function} 作答回调 - (选中文本) => void，由调用方决定如何把回复发回后端
+ * @returns {HTMLElement} 面板 DOM（由调用方 append 到目标消息体）
+ */
+export function 创建提问面板(提问数据, 作答回调) {
+    const 面板 = el("div", { class: "nca-ask-user-panel" });
+    面板.appendChild(el("div", { class: "nca-ask-user-question", text: `❓ ${提问数据.question || ""}` }));
+    const 选项列表 = Array.isArray(提问数据.options) ? 提问数据.options : [];
+    if (选项列表.length > 0) {
+        const 选项区 = el("div", { class: "nca-ask-user-options" });
+        选项列表.forEach((opt) => {
+            const btn = el("button", { class: "nca-ask-user-option-btn", text: opt });
+            btn.type = "button";
+            btn.addEventListener("click", () => {
+                // 防重复点击：已作答后禁用全部选项
+                if (面板.dataset.answered === "1") return;
+                面板.dataset.answered = "1";
+                选项区.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+                // 点击选项 = 以该选项为用户回复，由调用方发起新一轮
+                if (typeof 作答回调 === "function") 作答回调(opt);
+            });
+            选项区.appendChild(btn);
+        });
+        面板.appendChild(选项区);
+    }
+    面板.appendChild(el("div", { class: "nca-ask-user-hint", text: t("chat.ask_user_hint") }));
+    return 面板;
+}
+
 // ============================================================
 // 区域：快捷键管理
 // ============================================================
