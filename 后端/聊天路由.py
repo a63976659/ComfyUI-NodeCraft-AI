@@ -579,6 +579,21 @@ async def handle_chat_stream(request):
         用户明确跳过 = data.get("skip_planning", False)  # 确认后的二次请求
         用户选择 = data.get("user_choices")  # 上次规划的用户选择
 
+        async def _安全推送规划事件(payload):
+            """客户端已断开（transport 关闭中）时静默跳过推送，返回 False。
+
+            防止降级/确认路径上向已关闭的 transport 写入引发
+            Cannot write to closing transport（表现为外层 ERROR 堆栈）。
+            """
+            transport = response.transport
+            if transport is None or transport.is_closing():
+                return False
+            try:
+                await response.write(f"data: {_serialize_chunk(payload)}\n\n".encode('utf-8'))
+                return True
+            except (ConnectionError, RuntimeError):
+                return False
+
         if (设置中启用规划 and not 用户明确跳过
                 and model_source == "api" and active_tab in ("develop", "optimize")):
             try:
@@ -589,51 +604,45 @@ async def handle_chat_stream(request):
                     预筛结果 = 预筛选(user_message, active_tab, len(session_data.get("messages", [])))
 
                     if 预筛结果["需要规划"]:
-                        # 推送"规划中"状态
-                        planning_start = _serialize_chunk({"type": "planning_start"})
-                        await response.write(f"data: {planning_start}\n\n".encode('utf-8'))
+                        # 推送“规划中”状态；客户端已断开则放弃本次规划（后续写入必然全部失败）
+                        if not await _安全推送规划事件({"type": "planning_start"}):
+                            return response
 
-                        # 调用 LLM 生成规划（独立提示词，5s超时）
+                        # 调用 LLM 生成规划（独立提示词）。非流式 JSON 生成在思考型
+                        # 模型上动辄十几秒，原 5s 超时会导致规划从未成功、静默降级
                         计划结果 = await asyncio.wait_for(
                             生成执行计划(user_message, plugin_path, llm_client, settings),
-                            timeout=5.0
+                            timeout=60.0
                         )
 
-                        if 计划结果 and 计划结果.get("questions"):
+                        if 计划结果:
                             # 记录规划配额消耗
                             记录规划(session_id)
-
-                            # 有需要询问的问题 → 推送计划+问题，结束流
-                            plan_data = _serialize_chunk(_规划结果payload(计划结果, 计划结果["questions"]))
-                            await response.write(f"data: {plan_data}\n\n".encode('utf-8'))
-
-                            # 结束流，等待用户确认
-                            done_data = _serialize_chunk(
-                                {"type": "planning_done", "needs_confirmation": True, "done": True}
-                            )
-                            await response.write(f"data: {done_data}\n\n".encode('utf-8'))
-                            return response
-                        elif 计划结果:
-                            # 有计划但无需询问 → 推送计划信息（仅展示），继续执行
-                            记录规划(session_id)
-                            plan_data = _serialize_chunk(_规划结果payload(计划结果, []))
-                            await response.write(f"data: {plan_data}\n\n".encode('utf-8'))
-
-                            # 将规划上下文注入系统提示词（指导后续执行）
-                            _注入规划上下文(complete_messages, 计划结果)
-                            # 不return，继续正常流式对话
+                            questions = 计划结果.get("questions") or []
+                            # 复杂任务或需关键决策 → 停下征询确认；其余展示后继续执行
+                            需要确认 = bool(questions) or 计划结果.get("complexity") == "complex"
+                            if 需要确认:
+                                # 推送计划+问题，结束流等待用户确认
+                                if not await _安全推送规划事件(_规划结果payload(计划结果, questions)):
+                                    return response
+                                await _安全推送规划事件(
+                                    {"type": "planning_done", "needs_confirmation": True, "done": True}
+                                )
+                                return response
+                            else:
+                                # 有计划但无需确认 → 推送计划信息（仅展示），继续执行
+                                await _安全推送规划事件(_规划结果payload(计划结果, []))
+                                # 将规划上下文注入系统提示词（指导后续执行）
+                                _注入规划上下文(complete_messages, 计划结果)
+                                # 不return，继续正常流式对话
             except asyncio.TimeoutError:
-                logger.warning("[规划阶段] 超时(5s)，自动降级进入工具循环")
-                # 向前端推送状态事件，告知规划已跳过（前端对未知类型事件安全忽略）
-                try:
-                    _skip_data = _serialize_chunk({
-                        "type": "status",
-                        "status": "planning_skipped",
-                        "message": "规划超时，已直接执行",
-                    })
-                    await response.write(f"data: {_skip_data}\n\n".encode('utf-8'))
-                except Exception as _e:
-                    logger.debug(f"[规划阶段] 推送超时状态事件失败（忽略）: {_e}")
+                logger.warning("[规划阶段] 超时(60s)，自动降级进入工具循环")
+                # 向前端推送状态事件，告知规划已跳过（客户端已断开时静默跳过）
+                await _安全推送规划事件({
+                    "type": "status",
+                    "status": "planning_skipped",
+                    "message": "规划超时，已直接执行",
+                })
             except Exception as e:
                 logger.warning(f"[规划阶段] 异常({e})，自动降级进入工具循环")
 
