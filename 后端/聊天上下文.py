@@ -43,6 +43,14 @@ TAB_SYSTEM_PROMPTS = {
         "要求：\n"
         "1. 提供完整、可运行的代码，不要省略逻辑。\n"
         "2. __init__.py 等核心文件必须遵循英文命名，其他业务文件夹允许使用中文。\n"
+        "3. 目录规范（必须遵守）：\n"
+        "   - 节点类 .py 文件必须放入插件的节点目录（中文项目为 `节点/`，英文项目为 `nodes/`），"
+        "并在 `__init__.py` 中用 `from .节点.XX import ...` 或 `from .nodes.XX import ...` 导入注册\n"
+        "   - 前端 .js 扩展文件必须放入前端资源目录（中文项目为 `网页资源/`，英文项目为 `web/`），"
+        "并在 `__init__.py` 中设置对应的 `WEB_DIRECTORY`\n"
+        "   - 严禁在插件根目录新建 `nodes.py` 或新建 `web/`（中文项目）存放代码，"
+        "也不要使用 `逻辑处理模块/`、`界面与静态资源/` 等非标准目录名\n"
+        "   - 项目采用哪套目录名以 [本轮参考上下文] 中的目录规范或现有文件树为准\n"
         "\n## 前端 UI 设计规范（必须遵守）\n\n"
         "创建 ComfyUI 自定义节点时，必须为每个节点设计富 UI 前端扩展，使节点放置到画布上就能直观展示功能：\n\n"
         "1. **每个插件必须包含前端扩展**：\n"
@@ -117,6 +125,66 @@ TAB_SYSTEM_PROMPTS = {
 
 # 合法的 activeTab 取值
 _VALID_ACTIVE_TABS = ("develop", "optimize", "visualize")
+
+
+def _生成目录规范提示(file_tree: list, ui_lang: str = None) -> str:
+    """根据插件实际目录结构生成目录合规提示（随文件树注入动态区）。
+
+    检测规则：
+    - 存在 节点/ 或 网页资源/ → 中文目录项目
+    - 存在 nodes/ 或 web/ → 英文目录项目
+    - 两套并存（旧模板产生的双结构）→ 提示先迁移到标准结构
+    - 均不存在 → 按界面语言默认（zh-CN 用中文目录，en 用英文目录）
+    """
+    dir_names = {item.get("name") for item in (file_tree or []) if item.get("type") == "dir"}
+    has_zh = bool(dir_names & {"节点", "网页资源"})
+    has_en = bool(dir_names & {"nodes", "web"})
+
+    if has_zh and has_en:
+        # 双结构并存：以数量占优的一套为标准（中文项目混入 web/ 迁向中文目录，反之迁向英文目录）
+        zh_count = len(dir_names & {"节点", "网页资源"})
+        if zh_count >= 2:
+            目标节点目录, 目标前端目录 = "节点/", "网页资源/"
+            web_directory表述 = '`WEB_DIRECTORY = "./网页资源"`'
+        else:
+            目标节点目录, 目标前端目录 = "nodes/", "web/"
+            web_directory表述 = '`WEB_DIRECTORY = "./web"`'
+        return (
+            "\n## 目录规范（检测到新旧双结构，必须先迁移）\n"
+            f"本插件同时存在中文（`节点/`+`网页资源/`）与英文（`nodes/`+`web/`）两套目录结构。"
+            f"标准结构是：节点 .py 放 `{目标节点目录}`，前端 .js 放 `{目标前端目录}`，"
+            f"{web_directory表述}。\n"
+            f"请先向用户确认是否迁移；确认后把散落在另一套目录里的文件移入 `{目标节点目录}`/`{目标前端目录}`，"
+            "同步更新 `__init__.py` 导入与 WEB_DIRECTORY，最后删除空的旧目录。迁移前不要往旧结构里继续加代码。"
+        )
+    if has_en and not has_zh:
+        return (
+            "\n## Directory Convention (this project)\n"
+            "Node .py files go in `nodes/`, frontend .js files go in `web/`, "
+            "and `__init__.py` must import nodes via `from .nodes.XX import ...` "
+            "and set `WEB_DIRECTORY = \"./web\"`. "
+            "Do NOT create `nodes.py` at the plugin root."
+        )
+    if has_zh and not has_en:
+        return (
+            "\n## 目录规范（本项目）\n"
+            "节点 .py 文件必须放 `节点/` 目录，前端 .js 文件必须放 `网页资源/` 目录，"
+            "`__init__.py` 用 `from .节点.XX import ...` 导入并设置 `WEB_DIRECTORY = \"./网页资源\"`。"
+            "严禁在根目录创建 `nodes.py` 或 `web/` 目录。"
+        )
+    # 无标准目录（如导入的第三方插件）：按界面语言提示，但不强制迁移
+    if ui_lang == "en":
+        return (
+            "\n## Directory Convention\n"
+            "When adding new node files, put them in a `nodes/` directory; "
+            "put frontend .js files in `web/` with `WEB_DIRECTORY = \"./web\"`. "
+            "Follow the existing layout if this plugin already uses another convention."
+        )
+    return (
+        "\n## 目录规范\n"
+        "新增节点 .py 文件请放入 `节点/` 目录，前端 .js 放入 `网页资源/` 目录，"
+        "`WEB_DIRECTORY = \"./网页资源\"`。若该插件已有其他目录约定，则沿用其现有结构。"
+    )
 
 
 # ─── P0-1 前缀稳定化：动态上下文块 ──────────────────────────
@@ -197,14 +265,14 @@ def _注入规划上下文(complete_messages: list, 计划结果: dict) -> None:
         parts.append(
             f"\n## 规划决策：需要前端 JS 扩展\n"
             f"- 原因：{前端原因}\n"
-            f"- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
-            f"- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+            f"- 请在 `网页资源/`（英文项目为 `web/`）目录下创建对应的 .js 文件\n"
+            f"- 务必在 `__init__.py` 中设置对应的 `WEB_DIRECTORY` 并在 `__all__` 中导出"
         )
     elif 需要前端 is True:
         parts.append(
             "\n## 规划决策：需要前端 JS 扩展\n"
-            "- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
-            "- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+            "- 请在 `网页资源/`（英文项目为 `web/`）目录下创建对应的 .js 文件\n"
+            "- 务必在 `__init__.py` 中设置对应的 `WEB_DIRECTORY` 并在 `__all__` 中导出"
         )
     elif 需要前端 is False:
         parts.append(
@@ -269,8 +337,8 @@ def _注入用户决策前端标志(complete_messages: list, 用户选择: dict)
             if any(kw in a_lower for kw in ("需要", "要", "是", "yes", "true")):
                 _追加动态块(complete_messages, (
                     "\n## 用户决策：需要前端 JS 扩展\n"
-                    "- 请在 `网页资源/` 目录下创建对应的 .js 文件\n"
-                    "- 务必在 `__init__.py` 中设置 `WEB_DIRECTORY = \"./网页资源\"` 并在 `__all__` 中导出"
+                    "- 请在 `网页资源/`（英文项目为 `web/`）目录下创建对应的 .js 文件\n"
+                    "- 务必在 `__init__.py` 中设置对应的 `WEB_DIRECTORY` 并在 `__all__` 中导出"
                 ))
             elif any(kw in a_lower for kw in ("不需要", "不用", "否", "no", "false")):
                 _追加动态块(complete_messages, (
@@ -310,7 +378,7 @@ _TOOL_USAGE_GUIDE = """
 - edit_file(file_path, patch): 增量编辑文件（仅修改需要变更的部分，适用于局部修改，更高效）
 - batch_edit(operations): 批量操作多个文件（适用于创建完整项目结构、同时修改多个文件）
 - list_plugin_files(): 查看插件的完整文件目录结构
-- update_readme(changelog_entry): 在 README.md 的"更新介绍"模块追加一条更新记录（仅在实际修改了插件文件后调用）
+- update_readme(changelog_entry): 在 README.md 的"更新记录"模块追加一条更新记录（仅在实际修改了插件文件后调用）
 - update_plan(steps): 维护任务执行计划清单（仅内存态，不写入文件）
 - ask_user(question, options?): 向用户提出必须由用户拍板的问题；调用后必须立即结束回合并等待用户真实回复，严禁自行假设答案继续执行
 
@@ -345,15 +413,15 @@ _TOOL_USAGE_GUIDE = """
 - edit: 增量编辑（content 为 SEARCH/REPLACE 块补丁，格式同 edit_file）
 - delete: 删除文件（自动创建 .bak 备份）
 
-batch_edit 调用示例：
+batch_edit 调用示例（节点代码必须放入节点目录，不要放根目录）：
 ```json
 {"name": "batch_edit", "arguments": {"operations": [
-  {"action": "create", "file_path": "__init__.py", "content": "from .nodes import *\\n"},
-  {"action": "create", "file_path": "nodes.py", "content": "class MyNode:\\n    pass\\n"},
-  {"action": "edit", "file_path": "config.py",
-   "content": "<<<<<<< SEARCH\\nold line\\n=======\\nnew line\\n>>>>>>> REPLACE"}
+  {"action": "create", "file_path": "节点/示例节点.py", "content": "class 示例节点:\\n    pass\\n"},
+  {"action": "edit", "file_path": "__init__.py",
+   "content": "<<<<<<< SEARCH\\nNODE_CLASS_MAPPINGS = {}\\n=======\\nfrom .节点.示例节点 import 示例节点\\nNODE_CLASS_MAPPINGS = {\"示例节点\": 示例节点}\\n>>>>>>> REPLACE"}
 ]}}
 ```
+英文目录项目将上述 `节点/` 换为 `nodes/` 即可。
 
 优先级：**局部修改时优先使用 edit_file**，可以大幅节省 token 和时间。
 **创建完整项目时优先使用 batch_edit**，一次操作多个文件更高效。
@@ -364,7 +432,7 @@ batch_edit 调用示例：
 要求：
 - 更新说明必须是一句简洁易懂的大白话，禁止使用专业术语
 - 例如：✅ "新增了图片风格转换功能"  ❌ "实现了基于 StyleGAN 的 latent space 映射"
-- 每次只在"更新介绍"模块追加，不要修改其他模块
+- 每次只在"更新记录"模块追加，不要修改其他模块
 
 选择规则：
 - 当文件超过50行时，必须优先使用 edit_file 进行局部修改，而非 write_plugin_file 全量覆写。
@@ -405,11 +473,11 @@ def hello():
 当文件超过 200 行时，使用「搜索 → 定位 → 精读」工作流：
 
 1. 用 search_plugin_file 定位目标代码：
-   {"name": "search_plugin_file", "arguments": {"file_path": "nodes.py", "pattern": "class MyNode"}}
+   {"name": "search_plugin_file", "arguments": {"file_path": "节点/示例节点.py", "pattern": "class MyNode"}}
    → 返回匹配行号和上下文
 
 2. 基于行号用 read_plugin_file 精确读取：
-   {"name": "read_plugin_file", "arguments": {"file_path": "nodes.py", "start_line": 45, "end_line": 120}}
+   {"name": "read_plugin_file", "arguments": {"file_path": "节点/示例节点.py", "start_line": 45, "end_line": 120}}
    → 只读需要的部分，避免截断
 
 3. 修改时用 edit_file 增量编辑（无需重读整个文件）
@@ -579,6 +647,11 @@ async def _build_chat_context(
     if isinstance(history_to_send, Exception):
         logger.warning(f"上下文压缩失败（降级为保留最近10条）: {history_to_send}")
         history_to_send = [dict(m) for m in session_data["messages"][-10:]]
+        _compressed_drop_count = 0  # 失败降级不推送压缩通知（避免误导）
+    else:
+        # 压缩可见性：净减少的消息条数（供 SSE 推送 context_compressed 通知，
+        # 对标 Claude Code "Compacting conversation..." 的可见压缩策略）
+        _compressed_drop_count = max(0, len(session_data["messages"]) - len(history_to_send))
 
     # 4.2 主动踩坑检索（编码/优化任务时，需设置开启）
     proactive_pitfalls = ""
@@ -648,6 +721,9 @@ async def _build_chat_context(
                 "以上文件结构已提供，无需调用 list_plugin_files 重复获取。"
                 "当用户要求修改文件时，直接读取相关文件并完成修改。"
             )
+            # 目录合规提示：按插件实际结构生成，仅开发/优化场景注入（可视化只读无需）
+            if active_tab in ("develop", "optimize"):
+                文件树摘要 += _生成目录规范提示(file_tree, (data or {}).get("language"))
 
             # 项目上下文深度分析（AST 级结构化摘要）
             if _项目上下文分析器 is not None:
@@ -812,4 +888,6 @@ async def _build_chat_context(
         # 云端知识库检索失败信号（供 SSE 推送 kb_status 降级提醒）
         "kb_retrieval_failed": kb_retrieval_failed,
         "kb_failure_reason": kb_failure_reason,
+        # 压缩净减少消息数（供 SSE 推送 context_compressed 通知，0 = 本次未压缩）
+        "compressed_drop_count": _compressed_drop_count,
     }

@@ -56,6 +56,8 @@ async def handle_create_folder(request):
 
         data = await request.json()
         plugin_name = data.get("plugin_name", "").strip()
+        # 界面语言（zh-CN/en）：决定脚手架目录名与 README 语言，缺省中文
+        language = data.get("language", "zh-CN")
 
         # C4: 插件名长度限制
         if len(plugin_name) > 128:
@@ -68,7 +70,7 @@ async def handle_create_folder(request):
         nodes_path = get_custom_nodes_path()
         # P1-1： create_plugin_scaffold 内部是同步文件 I/O，放入线程池
         success, message, path = await asyncio.to_thread(
-            create_plugin_scaffold, nodes_path, plugin_name
+            create_plugin_scaffold, nodes_path, plugin_name, language
         )
         return web.json_response({"success": success, "message": message, "path": path})
     except Exception as e:

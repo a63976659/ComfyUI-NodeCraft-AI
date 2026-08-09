@@ -180,7 +180,7 @@ FILE_TOOLS = [
     {
         "name": "update_readme",
         "description": (
-            '在插件的 README.md 的“更新介绍”模块追加一条更新记录。'
+            '在插件的 README.md 的“更新记录”模块追加一条更新记录（自动兼容旧版“更新介绍”/英文“Changelog”模块）。'
             '仅当本次任务实际修改了插件文件时才调用；纯阅读/分析/问答任务不要调用。'
             '更新说明必须是一句简洁易懂的大白话，禁止使用专业术语。'
         ),
@@ -672,6 +672,48 @@ def _解析安全路径(plugin_path: str, relative_path: str) -> Path:
     return full_path
 
 
+def _目录合规警告(file_paths: list, plugin_path: str) -> str:
+    """写入落点的目录合规软校验（只追加警告，不阻断写入）
+
+    检测两类常见跑偏：
+    1. 节点代码写成根目录 nodes.py（应放入 节点/ 或 nodes/）
+    2. 前端 JS 未放入 网页资源/ 或 web/（含与项目既有目录语言不匹配的情况）
+    让模型在写入当轮即收到提示并自行迁移，不破坏已写入内容。
+    """
+    try:
+        root = Path(plugin_path)
+        has_zh_node = (root / "节点").is_dir()
+        has_zh_web = (root / "网页资源").is_dir()
+        has_en_web = (root / "web").is_dir()
+        warnings = []
+        for fp in file_paths:
+            norm = str(fp).replace("\\", "/")
+            while norm.startswith("./"):
+                norm = norm[2:]
+            # 根目录 nodes.py 在任何语言规范下都不合规；
+            # nodes/ 路径仅在项目已有中文 `节点/` 目录时才视为跑偏（英文项目 nodes/ 是合规目录）
+            if norm == "nodes.py" or (norm.startswith("nodes/") and has_zh_node and not (root / "nodes").is_dir()):
+                warnings.append(
+                    f"⚠️ [目录合规] `{fp}` 落在插件根目录/nodes 路径：节点 Python 文件应放入 "
+                    "`节点/` 目录（英文项目为 `nodes/`），并在根 __init__.py 中 `from .节点.XX import ...` 注册。"
+                    "请后续将其迁移到正确目录，勿在根目录继续扩展节点代码。"
+                )
+            elif norm.endswith(".js") and not norm.startswith(("网页资源/", "web/")):
+                if has_zh_web:
+                    warnings.append(
+                        f"⚠️ [目录合规] `{fp}` 未放入前端目录：本项目前端 JS 应放在 `网页资源/` 下"
+                        "（WEB_DIRECTORY 指向该目录），请后续迁移。"
+                    )
+                elif has_en_web:
+                    warnings.append(
+                        f"⚠️ [目录合规] `{fp}` 未放入前端目录：本项目前端 JS 应放在 `web/` 下"
+                        "（WEB_DIRECTORY 指向该目录），请后续迁移。"
+                    )
+        return "\n".join(warnings)
+    except Exception:
+        return ""
+
+
 async def _附加语法检查(result: str, py_files: list, plugin_path: str) -> str:
     """写入成功后对 .py 文件自动附加语法检查结果
 
@@ -813,6 +855,11 @@ async def 执行工具(tool_name: str, tool_args: dict, plugin_path: str) -> str
         if (tool_name in ("write_plugin_file", "edit_file")
                 and result.startswith("✅") and file_path.endswith(".py")):
             result = await _附加语法检查(result, [file_path], plugin_path)
+        # 目录合规软校验：写入成功时检查落点是否符合节点/前端目录规范（仅警告不阻断）
+        if tool_name == "write_plugin_file" and result.startswith("✅"):
+            合规警告 = _目录合规警告([file_path], plugin_path)
+            if 合规警告:
+                result = result + "\n" + 合规警告
         return result
     elif tool_name == "batch_edit":
         # 批量操作使用专用锁，覆盖整个批量操作（非每个子操作单独加锁）
@@ -828,6 +875,20 @@ async def 执行工具(tool_name: str, tool_args: dict, plugin_path: str) -> str
             ]
             if _py_files:
                 result = await _附加语法检查(result, _py_files, plugin_path)
+        # 目录合规软校验：批量写入成功的文件检查落点规范（仅警告不阻断）
+        # 成功判定优先用结果头部「成功: N」计数（头部位于结果开头，不受尾部截断影响），
+        # 取不到头部时降级用 ✅ 标记（超长结果被截断/摘要后可能丢失行内 ✅）
+        _成功数匹配 = re.search(r"成功: (\d+)", result)
+        _有成功写入 = (int(_成功数匹配.group(1)) > 0) if _成功数匹配 else ("✅" in result)
+        if _有成功写入:
+            _all_paths = [
+                str(op.get("file_path", "")) for op in (tool_args.get("operations") or [])
+                if isinstance(op, dict) and op.get("action") in ("create", "write", "edit")
+                and op.get("file_path")
+            ]
+            合规警告 = _目录合规警告(_all_paths, plugin_path)
+            if 合规警告:
+                result = result + "\n" + 合规警告
         return result
     else:
         return await _带超时执行工具(tool_name, tool_args, plugin_path, 超时秒数)

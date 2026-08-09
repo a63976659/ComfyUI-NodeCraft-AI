@@ -447,11 +447,88 @@ def save_settings(settings):
 # ─── 插件脚手架 ───────────────────────────────────────────
 
 
-def _generate_readme_template(plugin_name: str) -> str:
-    """生成 8 模块结构的 README.md 模板"""
+def _generate_readme_template(plugin_name: str, language: str = "zh-CN") -> str:
+    """生成标准结构的 README.md 模板（按界面语言选择中/英文版）
+
+    结构与知识库《README文档规范》一致：标题→徽章占位→一句话介绍→目录→
+    设计理念/功能特点/安装方法/使用方法/项目结构/技术架构/更新记录。
+    徽章区用 HTML 注释占位（不渲染），由用户替换真实账号/仓库后启用或删除。
+    """
+    _badge_placeholder = (
+        "<!-- 徽章区（可选，放在标题下一行；替换为真实账号/仓库后去掉注释符号启用，不需要则整段删除）\n"
+        "[![Bilibili](https://img.shields.io/badge/bilibili-你的B站昵称-00A1D6?logo=bilibili&logoColor=white)](https://space.bilibili.com/你的UID)\n"
+        "[![GitHub](https://img.shields.io/github/stars/你的用户名/你的仓库名?style=flat&logo=github)](https://github.com/你的用户名/你的仓库名)\n"
+        "-->\n\n"
+    )
+    if language == "en":
+        return f"""# {plugin_name}
+
+{_badge_placeholder}A custom node plugin for ComfyUI, providing convenient workflow enhancements.
+
+## Table of Contents
+
+- [Design Philosophy](#design-philosophy)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Technical Architecture](#technical-architecture)
+- [Changelog](#changelog)
+
+## Design Philosophy
+
+This plugin focuses on simplicity and follows the ComfyUI node development conventions,
+aiming to boost creative efficiency without adding learning cost.
+
+## Features
+
+- Built on the ComfyUI V3 node specification
+- Lightweight design with no extra dependencies
+- (To be added: describe your plugin's features here)
+
+## Installation
+
+1. Copy the plugin folder into the `ComfyUI/custom_nodes/` directory
+2. Restart ComfyUI
+3. Search for the plugin name in the node menu to use it
+
+## Usage
+
+(To be added: which node menu category the nodes appear in, and basic usage)
+
+## Project Structure
+
+```
+{plugin_name}/
+├── __init__.py        # Node registration entry
+├── README.md          # Documentation
+├── requirements.txt   # Dependencies
+├── nodes/             # Node code
+└── web/               # Frontend assets (WEB_DIRECTORY)
+```
+
+## Technical Architecture
+
+Built on the ComfyUI V3 node specification; `__init__.py` registers node classes and
+`WEB_DIRECTORY` loads the frontend assets. (May be removed if there is no frontend extension)
+
+## Changelog
+
+- Initial plugin creation
+"""
     return f"""# {plugin_name}
 
-一个为 ComfyUI 打造的自定义节点插件，提供便捷的工作流增强能力。
+{_badge_placeholder}一个为 ComfyUI 打造的自定义节点插件，提供便捷的工作流增强能力。
+
+## 目录
+
+- [设计理念](#设计理念)
+- [功能特点](#功能特点)
+- [安装方法](#安装方法)
+- [使用方法](#使用方法)
+- [项目结构](#项目结构)
+- [技术架构](#技术架构)
+- [更新记录](#更新记录)
 
 ## 设计理念
 
@@ -460,35 +537,45 @@ def _generate_readme_template(plugin_name: str) -> str:
 ## 功能特点
 
 - 基于 ComfyUI V3 节点规范开发
-- 支持中文界面显示
 - 轻量级设计，无额外依赖
+- （待补充：在这里介绍你的插件功能）
 
-## 界面预览
+## 安装方法
 
-（待补充截图或 GIF 演示）
-
-## 更新介绍
-
-- 插件初始化创建
-
-## 安装说明
-
-1. 将插件文件夹复制到 `ComfyUI/custom_nodes/` 目录下
+1. 将插件文件夹放入 `ComfyUI/custom_nodes/` 目录下
 2. 重启 ComfyUI
 3. 在节点菜单中搜索插件名称即可使用
 
-## 开源协议
+## 使用方法
 
-本项目遵循 MIT 开源协议。
+（待补充：说明节点在节点菜单哪个分类下、基本用法，可配截图）
 
-## 致谢
+## 项目结构
 
-感谢 ComfyUI 社区提供的优秀插件生态和开发规范。
+```
+{plugin_name}/
+├── __init__.py        # 节点注册入口
+├── README.md          # 说明文档
+├── requirements.txt   # 依赖声明
+├── 节点/              # 节点代码
+└── 网页资源/          # 前端资源（WEB_DIRECTORY）
+```
+
+## 技术架构
+
+基于 ComfyUI V3 节点规范开发，`__init__.py` 负责节点注册，`WEB_DIRECTORY` 声明加载前端资源。
+（没有前端扩展时可删除本节）
+
+## 更新记录
+
+- 插件初始化创建
 """
 
 
 def update_readme_changelog(plugin_path: str, changelog_entry: str) -> dict:
-    """在 README.md 的“更新介绍”模块追加一条更新记录
+    """在 README.md 的“更新记录”模块追加一条更新记录
+
+    兼容三种模块标题：新规范“更新记录”、旧版中文“更新介绍”、英文“Changelog”。
 
     参数:
         plugin_path: 插件根目录路径
@@ -507,12 +594,17 @@ def update_readme_changelog(plugin_path: str, changelog_entry: str) -> dict:
     except Exception as e:
         return {"success": False, "message": f"读取 README.md 失败: {e}"}
 
-    # 定位“更新介绍”模块
-    marker = "## 更新介绍"
-    idx = content.find(marker)
-    if idx == -1:
-        # 没有该模块，在末尾追加
-        content += f"\n{marker}\n\n- {changelog_entry}\n"
+    # 依次定位新规范“更新记录”、旧版“更新介绍”、英文“Changelog”模块
+    marker = None
+    idx = -1
+    for candidate in ("## 更新记录", "## 更新介绍", "## Changelog"):
+        idx = content.find(candidate)
+        if idx != -1:
+            marker = candidate
+            break
+    if marker is None:
+        # 没有该模块，在末尾追加（用新规范标题）
+        content += f"\n## 更新记录\n\n- {changelog_entry}\n"
     else:
         # 在该模块标题后插入新条目
         insert_pos = idx + len(marker)
@@ -526,11 +618,15 @@ def update_readme_changelog(plugin_path: str, changelog_entry: str) -> dict:
     except Exception as e:
         return {"success": False, "message": f"写入 README.md 失败: {e}"}
 
-    return {"success": True, "message": f"已更新 README 更新介绍: {changelog_entry}"}
+    return {"success": True, "message": f"已更新 README 更新记录: {changelog_entry}"}
 
 
-def create_plugin_scaffold(base_path, plugin_name):
+def create_plugin_scaffold(base_path, plugin_name, language="zh-CN"):
     """一键生成合规的 ComfyUI 插件脚手架
+
+    language: 界面语言（zh-CN/en），决定目录名与生成内容语言：
+        - zh-CN: 节点/ + 网页资源/，WEB_DIRECTORY = "./网页资源"，中文 README
+        - en: nodes/ + web/，WEB_DIRECTORY = "./web"，英文 README
 
     返回: (success: bool, message: str, path: str)
     """
@@ -541,28 +637,46 @@ def create_plugin_scaffold(base_path, plugin_name):
     if target_path.exists():
         return False, f"❌ 文件夹 '{plugin_name}' 已存在，请更换名称。", ""
 
+    _is_en = language == "en"
+    node_dir = "nodes" if _is_en else "节点"
+    web_dir = "web" if _is_en else "网页资源"
+
     try:
         target_path.mkdir()
-        (target_path / "节点").mkdir()
-        (target_path / "网页资源").mkdir()
+        (target_path / node_dir).mkdir()
+        (target_path / web_dir).mkdir()
+        # 节点目录放空的 __init__.py，保证 `from .节点.XX import ...` 稳定可用
+        (target_path / node_dir / "__init__.py").write_text("", encoding="utf-8")
 
-        init_content = (
-            "# AI 自动生成的 ComfyUI 节点注册入口\n"
-            "WEB_DIRECTORY = \"./网页资源\"\n"
-            "\n"
-            "NODE_CLASS_MAPPINGS = {}\n"
-            "NODE_DISPLAY_NAME_MAPPINGS = {}\n"
-            "__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']\n"
-        )
+        if _is_en:
+            init_content = (
+                "# AI-generated ComfyUI node registration entry\n"
+                "WEB_DIRECTORY = \"./web\"\n"
+                "\n"
+                "NODE_CLASS_MAPPINGS = {}\n"
+                "NODE_DISPLAY_NAME_MAPPINGS = {}\n"
+                "__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']\n"
+            )
+        else:
+            init_content = (
+                "# AI 自动生成的 ComfyUI 节点注册入口\n"
+                "WEB_DIRECTORY = \"./网页资源\"\n"
+                "\n"
+                "NODE_CLASS_MAPPINGS = {}\n"
+                "NODE_DISPLAY_NAME_MAPPINGS = {}\n"
+                "__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']\n"
+            )
         (target_path / "__init__.py").write_text(init_content, encoding="utf-8")
 
         (target_path / "README.md").write_text(
-            _generate_readme_template(plugin_name),
+            _generate_readme_template(plugin_name, language),
             encoding="utf-8"
         )
 
         (target_path / "requirements.txt").write_text("", encoding="utf-8")
 
+        if _is_en:
+            return True, f"✅ Project directory created: {plugin_name}. __init__.py initialized.", str(target_path)
         return True, f"✅ 成功创建插件目录：{plugin_name}。已初始化 __init__.py。", str(target_path)
     except Exception as e:
         return False, f"❌ 创建目录时发生错误: {str(e)}", ""

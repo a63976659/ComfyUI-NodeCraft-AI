@@ -620,10 +620,27 @@ async def handle_code_review(request):
                 "error": f"未找到可审查的文件（深度: {review_depth}）",
             }, status=400)
 
-        # 2. 读取源码
-        max_chars = 6000 if review_depth == "deep" else 10000
+        # 2. 文件数上限：防止大插件拼出超模型上下文的提示词。
+        # 优先级：__init__.py 最先，路径层级浅的（核心文件）优先；超出部分计入省略数
+        文件数上限 = {"quick": 10, "standard": 30, "deep": 40}.get(review_depth, 30)
+        省略文件数 = 0
+        if len(review_files) > 文件数上限:
+            review_files.sort(key=lambda f: (0 if f.endswith("__init__.py") else 1, f.count("/"), f))
+            省略文件数 = len(review_files) - 文件数上限
+            review_files = review_files[:文件数上限]
+            logger.info(f"审查文件数超限：{review_depth} 模式保留 {文件数上限} 个核心文件，省略 {省略文件数} 个")
+
+        # 3. 读取源码
+        # 单文件截断：deep 覆盖更多文件，与 standard 同为 8000；总量另由总字符预算兜底
+        max_chars = {"quick": 12000, "standard": 8000, "deep": 8000}.get(review_depth, 8000)
+        总字符预算 = 180000  # 约 45k token，为系统提示词与模型上下文留余量
+        已用字符 = 0
+        预算省略数 = 0
         file_summaries = []
         for rel_path in review_files:
+            if 已用字符 >= 总字符预算:
+                预算省略数 += 1
+                continue
             full_path = plugin_path / rel_path
             try:
                 content = await asyncio.to_thread(
@@ -631,6 +648,7 @@ async def handle_code_review(request):
                 )
                 if len(content) > max_chars:
                     content = content[:max_chars] + f"\n...[文件已截断，原始长度 {len(content)} 字符]"
+                已用字符 += len(content)
                 file_summaries.append({
                     "path": rel_path,
                     "content": content,
@@ -665,6 +683,14 @@ async def handle_code_review(request):
 
         # 4. 构建审查提示词
         system_prompt, user_message = _构建审查提示词(file_summaries, review_knowledge, review_depth)
+
+        # 因文件数/总字符预算被省略的文件，告知模型避免其对未见文件下结论
+        总省略数 = 省略文件数 + 预算省略数
+        if 总省略数 > 0:
+            user_message += (
+                f"\n\n注意：因总量限制另有 {总省略数} 个文件未纳入本次审查，"
+                f"请仅针对上面已提供内容的文件进行分析，不要对未审查文件下结论。"
+            )
 
         # 4.5 如果有静态分析数据，追加到提示词
         if 静态分析结果:
@@ -777,6 +803,8 @@ async def handle_code_review(request):
         review_result["review_depth"] = review_depth
         review_result["files_reviewed"] = len(file_summaries)
         review_result["file_list"] = [f["path"] for f in file_summaries]
+        if 总省略数 > 0:
+            review_result["files_skipped"] = 总省略数
 
         # 云端知识库检索失败时附加降级提醒字段（正常时不新增字段，保持向后兼容）
         if tool_router is not None and getattr(tool_router, "kb_retrieval_failed", False):

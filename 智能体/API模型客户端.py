@@ -226,7 +226,8 @@ class AICoderClient:
         "gpt-4o", "gpt-4-turbo", "gpt-4-vision",
         "claude-3", "claude-3.5",
         "gemini-pro-vision", "gemini-1.5", "gemini-2",
-        "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+        "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qwen3-vl", "qwen3.5-vl",
+        "qwen3.8",  # qwen3.8 系列原生多模态
         "glm-4v", "yi-vision",
         "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7", "vision-preview",
     )

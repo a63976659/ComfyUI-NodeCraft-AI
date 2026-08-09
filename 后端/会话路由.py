@@ -19,6 +19,7 @@ from .文件读写操作 import (
     delete_session,
     load_session,
     load_sessions_list,
+    load_settings,
     save_session,
 )
 from .路由公共 import (
@@ -174,14 +175,31 @@ async def handle_get_messages(request):
             page_size = _默认消息页大小
             start = max(0, total - page_size)
             total_pages = (total + page_size - 1) // page_size if total > 0 else 1
-            return web.json_response({
+            # 上下文健康度：基于全量历史离线估算，供首屏初始化指示器
+            # （此前仅流式聊天推送，会话加载/切换/刷新后指示器恒 0%）；
+            # 计算失败不阻断消息接口，仅缺省该字段
+            try:
+                from .聊天上下文 import _calculate_context_health  # 延迟导入避免循环依赖
+                _settings = await asyncio.to_thread(load_settings)
+                context_health = await asyncio.to_thread(
+                    _calculate_context_health,
+                    messages,
+                    _settings.get("model_name", ""),
+                    _settings.get("max_tokens", 4096),
+                )
+            except Exception:
+                context_health = None
+            _payload = {
                 "messages": messages[start:],
                 "total": total,
                 "page": total_pages,  # 语义：最近一页（最后一页）
                 "page_size": page_size,
                 "total_pages": total_pages,
                 "start_index": start,
-            })
+            }
+            if context_health is not None:
+                _payload["context_health"] = context_health
+            return web.json_response(_payload)
 
         # 增量加载：返回 after_index 之后的消息
         if "after_index" in request.query:

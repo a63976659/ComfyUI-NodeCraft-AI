@@ -574,13 +574,21 @@ async def handle_chat_stream(request):
         full_reply = ""
 
         # 推送上下文健康度（流开始前）
+        # 注意：设置键名为 model_name（历史上误写 "model" 永远取到空串，分母恒走 32K 回退）
         _health = _calculate_context_health(
             complete_messages,
-            settings.get("model", ""),
+            settings.get("model_name", ""),
             settings.get("max_tokens", 4096)
         )
         _health_data = _serialize_chunk({"type": "context_health", **_health})
         await response.write(f"data: {_health_data}\n\n".encode('utf-8'))
+
+        # 推送压缩通知：仅当本次压缩确实丢弃了早期消息时（前端 Toast 提醒，
+        # 对齐 Claude Code 的可见压缩策略，避免用户不知情的静默失忆）
+        _drop_count = ctx.get("compressed_drop_count", 0)
+        if _drop_count > 0:
+            _compressed_data = _serialize_chunk({"type": "context_compressed", "count": _drop_count})
+            await response.write(f"data: {_compressed_data}\n\n".encode('utf-8'))
 
         # 知识库检索失败时推送一次 kb_status 降级提醒（仅失败时推送）
         if ctx.get("kb_retrieval_failed"):
@@ -605,8 +613,11 @@ async def handle_chat_stream(request):
             防止降级/确认路径上向已关闭的 transport 写入引发
             Cannot write to closing transport（表现为外层 ERROR 堆栈）。
             """
-            transport = response.transport
-            if transport is None or transport.is_closing():
+            # 旧版 aiohttp（<3.13，如 aki 整合包环境的 3.12）的 StreamResponse 无 transport 属性，
+            # getattr 兜底为 None 时无法预判是否断连：不能按断开处理（否则每次推送都会中断流），
+            # 放行尝试写入，由下方异常捕获兜底；仅明确 is_closing() 时才跳过
+            transport = getattr(response, "transport", None)
+            if transport is not None and transport.is_closing():
                 return False
             try:
                 await response.write(f"data: {_serialize_chunk(payload)}\n\n".encode('utf-8'))
@@ -748,7 +759,8 @@ async def handle_chat_stream(request):
                     logger.warning(f"[聊天路由] 消息总字符数({_total_chars})过大，可能超出模型上下文窗口")
                 file_tools, _tool_executor, _ask容器 = _build_tool_executor(plugin_path, _tool_call_sequence, active_tab)
                 # 即将发起模型流式调用：推送推理开始事件（前端显示状态行）
-                await _推送推理开始(settings.get("model", ""))
+                # 设置键名为 model_name（与流前健康度计算保持一致，历史上误写 "model" 永远取到空串）
+                await _推送推理开始(settings.get("model_name", ""))
                 async for chunk in _带首块心跳(llm_client.流式对话(
                     complete_messages, settings,
                     tools=file_tools,
@@ -813,7 +825,7 @@ async def handle_chat_stream(request):
             _final_messages = complete_messages + [{"role": "assistant", "content": full_reply}]
             _final_health = _calculate_context_health(
                 _final_messages,
-                settings.get("model", ""),
+                settings.get("model_name", ""),
                 settings.get("max_tokens", 4096)
             )
             _final_health_data = _serialize_chunk({"type": "context_health", **_final_health})

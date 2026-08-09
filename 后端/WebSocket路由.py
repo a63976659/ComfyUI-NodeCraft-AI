@@ -305,7 +305,8 @@ async def _handle_ws_chat(ws, request, session_id, message, data=None):
             # ask_user 容器：WebSocket 路径不推送结构化提问事件，忽略即可（工具内置兜底会让模型停下）
             file_tools, _tool_executor, _ = _build_tool_executor(plugin_path, active_tab=active_tab)
             # 即将发起模型流式调用：推送推理开始事件（发送失败即中止本次流式处理）
-            if not await _推送推理开始(settings.get("model", "")):
+            # 设置键名为 model_name（与流前健康度计算保持一致，历史上误写 "model" 永远取到空串）
+            if not await _推送推理开始(settings.get("model_name", "")):
                 return
             async for chunk in _带首块心跳(llm_client.流式对话(
                 complete_messages, settings,
