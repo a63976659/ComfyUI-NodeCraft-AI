@@ -361,6 +361,21 @@ class AICoderClient:
             return "prefix"
         return None
 
+    @staticmethod
+    def _历史含函数调用(messages: list) -> bool:
+        """历史消息中是否出现过工具调用记录（assistant tool_calls 或 role=tool）。
+
+        DeepSeek 官方 prefix 续写与函数调用是会话级互斥：只要历史里带过
+        工具调用记录，即使本轮不传 tools 参数，请求也会被 400 拒绝
+        （"Function call should not be used with prefix"），续写前据此回退土办法。
+        """
+        for m in messages or []:
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") == "tool" or (m.get("role") == "assistant" and m.get("tool_calls")):
+                return True
+        return False
+
     def _beta端点(self, base_url: str) -> str:
         """将 base_url 的 path 替换为 /beta（DeepSeek prefix 续写与 FIM 需 beta 端点）
 
@@ -1225,6 +1240,11 @@ class AICoderClient:
                 logger.info("API 输出被截断，尝试续写...")
                 try:
                     _续写风格 = self._前缀续写能力(model_name)
+                    # DeepSeek prefix 与函数调用会话级互斥：历史带过工具调用记录
+                    # 就 400，工具场景回退土办法（Kimi partial 实测可共存，不受限）
+                    if _续写风格 == "prefix" and self._历史含函数调用(complete_messages):
+                        logger.info("历史含工具调用记录，DeepSeek prefix 续写不可用，回退追加提示续写")
+                        _续写风格 = None
                     if _续写风格:
                         # 官方协议：末条 assistant 消息带 partial/prefix 标记承载已输出内容，
                         # 模型从断点自然接续，无重复文本；不再追加"你被截断了"的 user 消息
@@ -1821,6 +1841,11 @@ class AICoderClient:
                 # 的 assistant 消息承载前缀，模型从断点自然接续，不重复已输出内容
                 _续写风格 = (self._前缀续写能力(model_name)
                            if assistant_content_buffer.strip() else None)
+                # DeepSeek prefix 与函数调用会话级互斥：工具循环里历史必带 tool
+                # 记录，此时 prefix 续写必 400，回退土办法保住工具循环不中断
+                if _续写风格 == "prefix" and self._历史含函数调用(prepared_messages):
+                    logger.info("历史含工具调用记录，DeepSeek prefix 续写不可用，回退追加提示续写")
+                    _续写风格 = None
                 if _续写风格:
                     _前缀消息 = {"role": "assistant", "content": assistant_content_buffer,
                                _续写风格: True}
