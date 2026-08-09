@@ -62,6 +62,15 @@ export function 创建附件组件(rootContainer, onChange) {
     更新附件按钮状态();
     // 模型切换时重新查询
     事件总线.on(事件.模型选择变更, () => 更新附件按钮状态());
+    // 兜底自愈：后端能力判定变化（如白名单修复/重启生效）不会触发模型切换事件，
+    // 仅初始化查询会把按钮永久锁死，定期重查确保禁用态可逆
+    const _自愈定时器 = setInterval(更新附件按钮状态, 30000);
+    const _监听目标 = rootContainer instanceof Element ? rootContainer : document.body;
+    new MutationObserver(() => {
+        if (!_监听目标.contains(文件按钮)) {
+            clearInterval(_自愈定时器);
+        }
+    }).observe(_监听目标, { childList: true, subtree: true });
 
     function 渲染预览() {
         预览区.innerHTML = "";

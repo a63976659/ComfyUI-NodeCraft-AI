@@ -159,6 +159,11 @@ export function 创建SSE事件处理器({ 消息体获取, 滚动 }) {
             }
             return 'skip';
         }
+        // ── 上下文压缩通知：早期消息被压缩丢弃时 Toast 提醒（对标 Claude Code 可见压缩）──
+        if (data.type === 'context_compressed') {
+            if (data.count > 0) Toast.info(t('chat.context_compressed', { n: data.count }));
+            return 'skip';
+        }
         // ── 知识库检索状态：侧边栏常驻通知条，不渲染为聊天消息 ──
         if (data.type === 'kb_status') {
             if (data.status === 'degraded' && data.message) {

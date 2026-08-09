@@ -101,7 +101,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         null,
         'visualize'
     );
-    // selector 不直接挂到 panel，稍后放入统一滚动区 mainArea（见下方主体区域）
+    // selector 不直接挂到 panel，稍后放入主体区域 mainArea（见下方）
 
     // ─── 状态栏 ───────────────────────────────────────────────
     const vizStatus = el("div", {
@@ -112,7 +112,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         },
     });
     vizStatus.textContent = t("visual.no_plugin");
-    // vizStatus 同样放入滚动区 mainArea，随内容整体滚动
+    // vizStatus 同样放入主体区域 mainArea，位于消息区滚动轴之外
 
     // ─── 操作栏 ───────────────────────────────────────────────
     const toolbar = el("div", { class: "nca-viz-toolbar", style: { flexShrink: "0" } });
@@ -183,7 +183,8 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         }
     }
 
-    // ─── 主体区域（统一滚动区）：插件选择器 + 状态栏 + 会话列表 + 可视化 + 消息区 ──
+    // ─── 主体区域：选择器/状态栏/会话列表固定 + 消息区独立滚动轴 ──
+    // 与优化/开发界面对齐：滚动轴在消息区自身（vizMsgArea），不在整个面板；
     // 模型切换栏与输入区固定在面板底部，不随滚动（见下方 panel.appendChild）
     const mainArea = el("div", {
         class: "nca-panel-main-area",
@@ -192,7 +193,7 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             flexDirection: "column",
             flex: "1",
             minHeight: "0",
-            overflowY: "auto",
+            overflow: "hidden",
         },
     });
     panel.appendChild(mainArea);
@@ -216,14 +217,15 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     });
     mainArea.appendChild(sidebarContainer);
 
-    // 内容区（可视化图 + 消息）：不再自身滚动，高度随内容撑开，由 mainArea 统一滚动
+    // 内容区（可视化图 + 消息）：不自身滚动，消息区（vizMsgArea）是独立滚动轴
     const contentArea = el("div", {
         class: "nca-visualize-content",
         style: {
-            flex: "1 0 auto",
+            flex: "1",
             display: "flex",
             flexDirection: "column",
             minWidth: "0",
+            minHeight: "0",
         },
     });
     mainArea.appendChild(contentArea);
@@ -265,8 +267,8 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     const vizMsgArea = el("div", {
         class: "nca-messages nc-viz-messages",
         style: {
-            height: "120px", overflowY: "auto", padding: "8px 12px",
-            borderTop: "1px solid rgba(255,255,255,0.06)", flexShrink: "0",
+            flex: "1", minHeight: "100px", overflowY: "auto", padding: "8px 12px",
+            borderTop: "1px solid rgba(255,255,255,0.06)",
         },
     });
     contentArea.appendChild(vizMsgArea);
@@ -694,6 +696,8 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
             最后文件夹来源 = null;
             当前会话 = null;
             设置插件文件夹('', 'visualize');
+            // 会话已关闭：上下文指示器回到空闲占位态（显示 —，避免残留上个会话数值）
+            事件总线.emit(事件.上下文健康更新, { idle: true });
             viz会话面板.clearSelection();
             vizMsgArea.innerHTML = "";
             同步当前插件名();
@@ -720,6 +724,8 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
                 vizMsgArea.innerHTML = "";
                 当前会话 = null;
                 if (最后文件夹来源 === 'session') 最后文件夹来源 = null;
+                // 当前会话已删除：上下文指示器回到空闲占位态（同 develop 面板删除行为）
+                事件总线.emit(事件.上下文健康更新, { idle: true });
                 同步当前插件名();
             }
         },

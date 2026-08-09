@@ -233,6 +233,7 @@ const 语言包 = {
         'chat.no_reply':        '（无回复）',
         'chat.context_full':    '上下文已满 ({percent}%)，建议新建会话以获得最佳体验',
         'chat.context_high':    '上下文使用率较高 ({percent}%)，复杂任务建议新建会话',
+        'chat.context_compressed': '🗜️ 已自动压缩 {n} 条早期对话以释放上下文',
 
         // ── 工具执行（与 工具函数.js 的 工具名映射 保持一致）──
         'tool.executing':       '正在执行',
@@ -774,6 +775,7 @@ const 语言包 = {
         'chat.no_reply':        '(No reply)',
         'chat.context_full':    'Context is full ({percent}%), start a new session for the best experience',
         'chat.context_high':    'Context usage is high ({percent}%), consider starting a new session for complex tasks',
+        'chat.context_compressed': '🗜️ {n} earlier messages auto-compressed to free up context',
 
         // ── Tool execution ───────────────────────────────
         'tool.executing':       'Executing',

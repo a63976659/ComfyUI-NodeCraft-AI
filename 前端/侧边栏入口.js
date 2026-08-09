@@ -11,7 +11,7 @@ import { 加载Marked库 } from "./工具函数.js";
 import { preconnectWebSocket } from "./流式聊天管理器.js";
 
 // 版本信标：浏览器端读 window.__NCA_BUILD 即可确定执行的是否为最新模块
-window.__NCA_BUILD = "r8-20260725-1810";
+window.__NCA_BUILD = "r11-20260809-1500";
 console.log("[NodeCraft] build", window.__NCA_BUILD);
 
 app.registerExtension({

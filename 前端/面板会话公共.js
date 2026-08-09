@@ -10,7 +10,7 @@
 import {
     el, NCA_API_BASE, 插件存储键, 移除视觉能力警告, Toast,
 } from "./工具函数.js";
-import { 状态, 获取会话列表, 创建会话 } from "./交互与状态.js";
+import { 状态, 获取会话列表, 创建会话, 事件总线 } from "./交互与状态.js";
 import { t } from "./i18n.js";
 import { 创建附件组件 } from "./附件上传组件.js";
 import { 绑定代码块复制按钮 } from "./消息渲染/代码复制.js";
@@ -108,13 +108,51 @@ function _面板适配器构建(options) {
 }
 
 /**
- * 2. 加载会话消息 — 从API加载消息历史并渲染到容器
+ * 2a. 短时窗持续贴底 — 覆盖进入会话后异步撑高场景
+ *     图片解码/压缩缩略图替换/DOMPurify pending-sanitize 重渲染都在此窗口内完成；
+ *     窗口结束自动断开，用户主动滚动（wheel/touch）立即终止，
+ *     保证「会话中不持续强制，不干扰上翻历史」的既有约束
+ * @param {HTMLElement} msgArea - 消息容器
+ */
+function _短时窗持续贴底(msgArea) {
+    if (typeof msgArea._nca贴底清理 === "function") msgArea._nca贴底清理();
+    const 贴底 = () => { msgArea.scrollTop = msgArea.scrollHeight; };
+    // DOM 变更（重渲染/缩略图替换/新增节点）→ 重新贴底
+    const mo = new MutationObserver(贴底);
+    mo.observe(msgArea, { subtree: true, childList: true, attributes: true, characterData: true });
+    // load 事件不冒泡：捕获阶段监听图片解码完成（初始 src 解码无 DOM 变更，MutationObserver 感知不到）
+    const 媒体加载 = () => 贴底();
+    msgArea.addEventListener("load", 媒体加载, true);
+    let 已停止 = false;
+    const 停止 = () => {
+        if (已停止) return;
+        已停止 = true;
+        mo.disconnect();
+        msgArea.removeEventListener("load", 媒体加载, true);
+        msgArea.removeEventListener("wheel", 停止, true);
+        msgArea.removeEventListener("touchmove", 停止, true);
+        msgArea._nca贴底清理 = null;
+    };
+    // 用户主动滚动 → 立即终止贴底（对标 ChatGPT/Claude：用户上翻即停止跟随）
+    msgArea.addEventListener("wheel", 停止, { capture: true, passive: true });
+    msgArea.addEventListener("touchmove", 停止, { capture: true, passive: true });
+    msgArea._nca贴底清理 = 停止;
+    setTimeout(停止, 1500);
+}
+
+/**
+ * 2. 加载会话消息 — 从 API 加载消息历史并渲染到容器
  *    气泡工厂复用会话核心（长消息折叠/附件缩略图/pending-sanitize 三界面统一）
  * @param {string} sessionId
  * @param {HTMLElement} msgArea - 消息容器
  * @param {Object} [options] - 发送面板消息 的参数集（编辑重生成的适配器组装用）
  */
 export async function 加载会话消息(sessionId, msgArea, options = {}) {
+    // 竞态防护：单调递增版本号，快速连点会话时晚到的旧响应直接丢弃
+    msgArea._nca加载版本 = (msgArea._nca加载版本 || 0) + 1;
+    const 本次版本 = msgArea._nca加载版本;
+    // 终止上次加载遗留的短时窗贴底观察器
+    if (typeof msgArea._nca贴底清理 === "function") msgArea._nca贴底清理();
     msgArea.innerHTML = "";
     msgArea._nca消息列表 = [];
     // 服务端强制分页后，首条消息在全量历史中的绝对索引（truncate_at 换算用）
@@ -123,6 +161,8 @@ export async function 加载会话消息(sessionId, msgArea, options = {}) {
     msgArea._nca发送参数 = options;
     if (!sessionId) {
         msgArea.appendChild(el("div", { class: "nca-empty-state", text: t("chat.select_or_create") }));
+        // 无会话：状态栏上下文指示器回到空闲占位态（与 develop 面板删除会话行为一致）
+        try { 事件总线.emit('context-health-updated', { idle: true }); } catch (_) {}
         return;
     }
     try {
@@ -130,9 +170,14 @@ export async function 加载会话消息(sessionId, msgArea, options = {}) {
         const res = await fetch(`${NCA_API_BASE}/sessions/${sessionId}/messages?recent=1`);
         if (!res.ok) return;
         const data = await res.json();
+        if (本次版本 !== msgArea._nca加载版本) return; // 已被更新的加载取代，丢弃旧响应
         const messages = data.messages || [];
         msgArea._nca消息列表 = messages;
         msgArea._nca起始偏移 = data.start_index || 0;
+        // 初始化状态栏上下文指示器（后端基于全量历史的离线估算，三面板共享状态栏）
+        if (data.context_health) {
+            try { 事件总线.emit('context-health-updated', data.context_health); } catch (_) {}
+        }
         if (messages.length === 0) {
             msgArea.appendChild(el("div", { class: "nca-empty-state", text: t("chat.no_messages") }));
             return;
@@ -148,9 +193,11 @@ export async function 加载会话消息(sessionId, msgArea, options = {}) {
             绑定代码块复制按钮(bubble);
             msgArea.appendChild(bubble);
         });
-        // 进入会话一次性到底：同步定位 + rAF 二次校正（长消息折叠/图片等异步撑高后仍贴底）
+        // 进入会话一次性到底：同步定位 + rAF 二次校正 + 短时窗持续贴底
+        // （覆盖图片解码/压缩缩略图替换/DOMPurify 重渲染等异步撑高）
         msgArea.scrollTop = msgArea.scrollHeight;
         requestAnimationFrame(() => { msgArea.scrollTop = msgArea.scrollHeight; });
+        _短时窗持续贴底(msgArea);
     } catch (e) {
         console.warn("[节点梦工厂] 加载会话消息失败:", e);
     }

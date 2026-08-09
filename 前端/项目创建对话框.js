@@ -6,7 +6,7 @@
 import { el, Toast, NCA_STORAGE_KEYS } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
 import { 创建插件文件夹, 创建会话 } from "./交互与状态.js";
-import { t } from "./i18n.js";
+import { t, 获取当前语言 } from "./i18n.js";
 
 // ═══════════════════════════════════════════════════════════════
 // 创建项目对话框
@@ -73,7 +73,7 @@ export function 显示创建项目对话框(rootContainer, refs) {
         createBtn.textContent = t("common.creating");
         createBtn.disabled = true;
 
-        const result = await 创建插件文件夹(name);
+        const result = await 创建插件文件夹(name, 获取当前语言());
         if (result.success) {
             Toast.success(t("project.created").replace(/^✓\s*/, ''));
             overlay.remove();

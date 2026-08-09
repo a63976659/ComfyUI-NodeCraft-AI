@@ -6,7 +6,7 @@
 import { NCA_STORAGE_KEYS } from "./工具函数.js";
 import { 存储 } from "./存储引擎.js";
 import { 创建会话 } from "./交互与状态.js";
-import { t } from "./i18n.js";
+import { t, 获取当前语言 } from "./i18n.js";
 
 // 入口类型 → 模板与默认项目名的映射（文案字段存 i18n key，使用处调 t() 以响应语言切换）
 const ENTRY_TYPE_MAP = {
@@ -276,6 +276,8 @@ export async function 显示模板市场对话框(rootContainer) {
                     entry_type: selectedEntry,
                     options: selectedOptions,
                     custom_names: customNames,
+                    // 界面语言透传：英文界面创建的模板项目用英文目录与英文内容
+                    language: 获取当前语言(),
                 })
             });
             const data = await resp.json();

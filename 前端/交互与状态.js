@@ -345,6 +345,8 @@ export async function 删除会话(id, deleteFolder = false, type = null) {
                 状态.当前消息列表 = [];
                 状态.消息起始偏移 = 0;
                 事件总线.emit(事件.消息列表更新, []);
+                // 当前会话已不存在：指示器回到空闲占位态（显示 —）
+                事件总线.emit(事件.上下文健康更新, { idle: true });
             }
             await 获取会话列表("develop");
         }
@@ -418,6 +420,9 @@ export async function 切换会话(id) {
         if (thisAbort.signal.aborted) return; // 已被更新的切换覆盖
         状态.当前消息列表 = data.messages || [];
         状态.消息起始偏移 = data.start_index || 0;
+        // 初始化上下文健康度指示器（后端基于全量历史的离线估算；
+        // 旧后端无此字段时保持原值不动）
+        if (data.context_health) 事件总线.emit(事件.上下文健康更新, data.context_health);
         // 强制到底=true：切换会话一次性定位，区别于会话内前插重渲染
         事件总线.emit(事件.消息列表更新, 状态.当前消息列表, { 强制到底: true });
     } catch (e) {
@@ -452,6 +457,8 @@ export async function 加载会话消息(sessionId) {
         const data = await 请求("GET", `/sessions/${sessionId}/messages?recent=1`);
         状态.当前消息列表 = data.messages || [];
         状态.消息起始偏移 = data.start_index || 0;
+        // 初始化上下文健康度指示器（同 切换会话）
+        if (data.context_health) 事件总线.emit(事件.上下文健康更新, data.context_health);
         // 强制到底=true：进入会话一次性定位，区别于会话内前插重渲染
         事件总线.emit(事件.消息列表更新, 状态.当前消息列表, { 强制到底: true });
     } catch (e) {
@@ -898,9 +905,12 @@ export async function 查询模型能力() {
             params.set("model_name", 状态.设置.model_name);
         }
         const resp = await 请求("GET", `/model-capabilities?${params}`);
-        _能力缓存 = resp;
+        // 请求() 返回响应信封 {success, message, data}，能力字段在 data 里；
+        // 不解包会导致 supports_vision 恒为 undefined，附件按钮被误判为不支持而禁用
+        const 能力 = (resp && resp.data) ? resp.data : resp;
+        _能力缓存 = 能力;
         _能力缓存时间 = now;
-        return resp;
+        return 能力;
     } catch (e) {
         console.warn("[节点梦工厂] 查询模型能力失败，降级为全部启用:", e);
         return { supports_vision: true, supports_file_content: true };
@@ -917,9 +927,10 @@ export async function 查询模型能力() {
 });
 
 // ─── 文件操作 API ─────────────────────────────────────────────
-export async function 创建插件文件夹(pluginName) {
+export async function 创建插件文件夹(pluginName, language = 'zh-CN') {
     try {
-        const data = await 请求("POST", "/create-folder", { plugin_name: pluginName });
+        // language 随界面语言透传：英文界面创建的插件用英文目录（nodes/web）与英文 README
+        const data = await 请求("POST", "/create-folder", { plugin_name: pluginName, language });
         return data;
     } catch (e) {
         console.error("[节点梦工厂] 创建文件夹失败:", e);
@@ -1048,50 +1059,21 @@ export function 是可重连错误(error) {
 }
 
 // ===== 上下文健康度指示器 =====
-function _创建上下文指示器() {
-    // 找到状态栏右侧区域
-    const statusRight = document.querySelector('.status-right');
-    if (!statusRight) return;
-
-    // 避免重复创建
-    if (document.querySelector('.nca-context-indicator')) return;
-
-    // 创建分隔符
-    const separator = document.createElement('span');
-    separator.className = 'status-separator';
-    separator.textContent = '|';
-
-    // 创建指示器容器
-    const indicator = document.createElement('span');
-    indicator.className = 'nca-context-indicator';
-    indicator.title = '上下文使用率';
-    indicator.innerHTML = `
-        <span class="context-bar-bg">
-            <span class="context-bar-fill"></span>
-        </span>
-        <span class="context-text">0%</span>
-    `;
-
-    statusRight.appendChild(separator);
-    statusRight.appendChild(indicator);
-}
-
-// DOM 就绪后创建指示器
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _创建上下文指示器);
-} else {
-    // 延迟确保状态栏已渲染
-    setTimeout(_创建上下文指示器, 500);
-}
-
-// 监听上下文健康度更新
+// 指示器 DOM 随状态栏静态挂载（见 会话视图管理器.js 渲染状态栏），
+// 此处仅监听事件更新数值；不再用一次性定时器探测创建（侧边栏懒挂载时
+// .status-right 尚不存在，探测会静默失败且无人重建）。
 事件总线.on('context-health-updated', (data) => {
-    // 确保指示器存在
-    _创建上下文指示器();
-
     const fill = document.querySelector('.context-bar-fill');
     const text = document.querySelector('.context-text');
     if (!fill || !text) return;
+
+    // 空闲占位态：无当前会话（未选择/已删除）时显示 — 而非误导性的 0%
+    if (!data || data.idle) {
+        fill.style.width = '0%';
+        fill.className = 'context-bar-fill';
+        text.textContent = '—';
+        return;
+    }
 
     const percent = Math.min(data.usage_percent || 0, 100);
     fill.style.width = `${percent}%`;

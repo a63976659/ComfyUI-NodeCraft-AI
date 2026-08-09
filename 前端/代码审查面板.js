@@ -261,6 +261,19 @@ export function 显示审查深度下拉菜单(anchor, onSelect) {
     // 关闭已有菜单
     document.querySelectorAll(".nca-review-depth-menu").forEach(m => m.remove());
 
+    // 主题变量作用域在 .nca-sidebar-root.nca-theme-light 上；
+    // 菜单若挂到作用域之外，需从作用域节点的 computed style 提取变量内联，
+    // 否则浅色主题下回退到 :root 深色默认值
+    const sidebarRoot = anchor.closest(".nca-sidebar-root");
+    const 继承主题 = 元素 => {
+        if (!sidebarRoot) return;
+        const cs = getComputedStyle(sidebarRoot);
+        for (const name of ["--nca-bg-elevated", "--nca-border", "--nca-shadow-md", "--nca-fg-dim", "--nca-hover-overlay", "--nca-accent", "--nca-font-mono"]) {
+            const v = cs.getPropertyValue(name).trim();
+            if (v) 元素.style.setProperty(name, v);
+        }
+    };
+
     const menu = el("div", {
         class: "nca-review-depth-menu",
         style: {
@@ -269,14 +282,15 @@ export function 显示审查深度下拉菜单(anchor, onSelect) {
             zIndex: "10000",
             flexDirection: "column",
             gap: "2px",
-            background: "var(--nca-bg-secondary, #1a1a2e)",
-            border: "1px solid var(--nca-border, rgba(255,255,255,0.08))",
+            background: "var(--nca-bg-elevated)",
+            border: "1px solid var(--nca-border)",
             borderRadius: "6px",
             padding: "4px",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+            boxShadow: "var(--nca-shadow-md)",
             minWidth: "140px",
         },
     });
+    继承主题(menu);
     const rect = anchor.getBoundingClientRect();
     menu.style.top = (rect.bottom + 4) + "px";
     menu.style.left = rect.left + "px";
@@ -288,22 +302,22 @@ export function 显示审查深度下拉菜单(anchor, onSelect) {
                 padding: "6px 12px",
                 background: "transparent",
                 border: "none",
-                color: "var(--nca-fg-dim, #9ca3af)",
+                color: "var(--nca-fg-dim)",
                 fontSize: "12px",
                 cursor: "pointer",
                 borderRadius: "4px",
                 textAlign: "left",
                 whiteSpace: "nowrap",
-                fontFamily: "var(--nca-font-mono, monospace)",
+                fontFamily: "var(--nca-font-mono)",
             },
         });
         opt.addEventListener("mouseenter", () => {
-            opt.style.background = "var(--nca-accent-dim, rgba(91,159,255,0.1))";
-            opt.style.color = "var(--nca-accent, #5b9fff)";
+            opt.style.background = "var(--nca-hover-overlay)";
+            opt.style.color = "var(--nca-accent)";
         });
         opt.addEventListener("mouseleave", () => {
             opt.style.background = "transparent";
-            opt.style.color = "var(--nca-fg-dim, #9ca3af)";
+            opt.style.color = "var(--nca-fg-dim)";
         });
         opt.addEventListener("click", (e) => {
             e.stopPropagation();
@@ -313,9 +327,10 @@ export function 显示审查深度下拉菜单(anchor, onSelect) {
         menu.appendChild(opt);
     });
 
-    // 直挂 document.body（sidebarRoot 防护覆盖不到），单独加翻译豁免
+    // 优先挂到侧边栏根容器内部，继承 .nca-theme-light 主题变量（对标会话视图管理器下拉菜单做法）；
+    // 兼容旧入口：侧边栏未就绪时才退回 document.body（配合内联变量继承）
     标记禁止翻译(menu);
-    document.body.appendChild(menu);
+    (sidebarRoot || document.body).appendChild(menu);
     requestAnimationFrame(() => {
         document.addEventListener("click", function closeMenu() {
             menu.remove();

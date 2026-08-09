@@ -226,6 +226,8 @@ export function 构建优化面板(panel, ctx) {
             最后文件夹来源 = null;
             当前会话 = null;
             设置插件文件夹('', 'optimize');
+            // 会话已关闭：上下文指示器回到空闲占位态（显示 —，避免残留上个会话数值）
+            事件总线.emit(事件.上下文健康更新, { idle: true });
             会话面板.clearSelection();
             渲染优化欢迎页(msgArea, input);
             更新状态栏();
@@ -250,6 +252,8 @@ export function 构建优化面板(panel, ctx) {
                 msgArea.innerHTML = "";
                 当前会话 = null;
                 if (最后文件夹来源 === 'session') 最后文件夹来源 = null;
+                // 当前会话已删除：上下文指示器回到空闲占位态（同 develop 面板删除行为）
+                事件总线.emit(事件.上下文健康更新, { idle: true });
             } else {
                 当前会话 = 会话面板.getCurrentSession ? 会话面板.getCurrentSession() : 当前会话;
             }
@@ -276,6 +280,15 @@ export function 构建优化面板(panel, ctx) {
     };
     事件总线.on(事件.插件选择变更, _on插件选择变更);
     _上次插件选择退订 = () => 事件总线.off(事件.插件选择变更, _on插件选择变更);
+
+    // 加载会话消息的公共参数集；setCurrentSessionId 不触发 onSessionSwitch，
+    // 「开始优化」匹配/创建会话后需手动复用同一参数集加载历史，保证消息区与实际会话一致
+    const _会话加载参数 = () => ({
+        input, sendBtn, msgArea, 附件,
+        activeTab: 'optimize',
+        getSessionId: () => 当前会话?.id || 会话面板.getCurrentSessionId(),
+        getPluginFolder: () => 获取有效文件夹(当前会话, 最后文件夹来源, 'optimize'),
+    });
 
     // ─── 双视图切换 + 代码审查 + 开始优化 ──────────────────────
     function 切换到审查视图(reviewData) {
@@ -425,11 +438,16 @@ export function 构建优化面板(panel, ctx) {
             const existing = sessions.find(s => s.plugin_folder === folder);
 
             if (existing) {
-                // 已有关联会话，切换到它
+                // 已有关联会话，切换到它：setCurrentSessionId 仅同步高亮（不触发 onSessionSwitch），
+                // 需手动对齐文件夹来源语义并加载该会话历史，否则消息区与实际会话脱节
                 if (会话面板 && 会话面板.setCurrentSessionId) {
                     会话面板.setCurrentSessionId(existing.id);
                 }
+                最后文件夹来源 = 'session';
+                设置插件文件夹('', 'optimize');
                 当前会话 = existing;
+                更新状态栏();
+                await 加载会话消息(existing.id, msgArea, _会话加载参数());
             } else {
                 // 没有关联会话，创建新的
                 const folderName = folder.split(/[\\/]/).pop();
@@ -445,6 +463,8 @@ export function 构建优化面板(panel, ctx) {
                         会话面板.setCurrentSessionId(newSession.id);
                     }
                 }
+                // 手动加载新会话（清空欢迎页，渲染空会话状态），与已有分支行为一致
+                加载会话消息(newSession.id, msgArea, _会话加载参数());
             }
         } catch (e) {
             Toast.error(t('session.prepare_fail_msg', { error: e.message }));

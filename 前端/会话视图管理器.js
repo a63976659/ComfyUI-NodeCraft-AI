@@ -28,7 +28,7 @@ import { 创建思考按钮组 } from "./思考按钮组.js";
 import { t, 监听语言切换, 获取当前语言, 切换语言 } from "./i18n.js";
 
 // 版本信标：浏览器端读 window.__NCA_VIEW_BUILD 即可确定执行的是否为最新模块
-window.__NCA_VIEW_BUILD = "r11-20260807-1900";
+window.__NCA_VIEW_BUILD = "r12-20260809-1500";
 
 // 语言切换监听器取消句柄（跨序于 renderSidebarUI 多次调用，需在重渲染前取消以避免重复注册）
 let _unsubLang = null;
@@ -742,6 +742,8 @@ export function renderSidebarUI(container) {
         if (是否流式中()) return;
         状态.当前会话ID = null;
         设置插件文件夹("");
+        // 会话已关闭：上下文指示器回到空闲占位态（显示 —，避免残留上个会话数值）
+        事件总线.emit(事件.上下文健康更新, { idle: true });
         渲染欢迎页(refs.消息区域, refs);
         // 触发公共会话列表面板重渲染（更新激活态、取消按钮可用性、当前会话标签）
         事件总线.emit(事件.会话列表更新, 状态.会话列表);
@@ -876,7 +878,19 @@ export function renderSidebarUI(container) {
     function 渲染状态栏() {
         refs.状态栏 = el("div", { class: "nca-status-bar" }, [
             el("div", { class: "status-left" }, [el("span", { class: "status-dot" }), el("span", { class: "status-text", text: "就绪" })]),
-            el("div", { class: "status-right" }, [el("span", { class: "status-model", text: "" }), el("span", { class: "status-separator", text: "•" }), el("span", { class: "status-session", text: "" })]),
+            el("div", { class: "status-right" }, [
+                el("span", { class: "status-model", text: "" }),
+                el("span", { class: "status-separator", text: "•" }),
+                el("span", { class: "status-session", text: "" }),
+                // 上下文使用率指示器：随状态栏静态挂载（侧边栏懒挂载使一次性定时器探测不可靠），
+                // 数值由 交互与状态.js 监听 context-health-updated 事件更新；
+                // 初始为空闲占位态 —（无会话加载时不显示误导性的 0%）
+                el("span", { class: "status-separator", text: "|" }),
+                el("span", { class: "nca-context-indicator", title: "上下文使用率" }, [
+                    el("span", { class: "context-bar-bg" }, [el("span", { class: "context-bar-fill" })]),
+                    el("span", { class: "context-text", text: "—" }),
+                ]),
+            ]),
         ]);
         return refs.状态栏;
     }
