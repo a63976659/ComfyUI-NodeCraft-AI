@@ -249,6 +249,15 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
     vizContainerWrapper.appendChild(vizContainer);
     contentArea.appendChild(vizContainerWrapper);
 
+    // ─── 显示框防复制保护（JS 事件拦截层，与 CSS 层叠加）─────
+    // 画布右键已由 OrbitControls 拦截；这里覆盖 HUD/详情面板等
+    // 覆盖区并兜底：右键菜单、拖拽、Ctrl+C 复制全部禁用；
+    // 搜索框等输入元素例外，保留其右键编辑菜单与复制能力
+    const _防复制例外 = (e) => !!(e.target && e.target.closest && e.target.closest("input, textarea"));
+    vizContainer.addEventListener("contextmenu", (e) => { if (!_防复制例外(e)) e.preventDefault(); });
+    vizContainer.addEventListener("dragstart", (e) => e.preventDefault());
+    vizContainer.addEventListener("copy", (e) => { if (!_防复制例外(e)) e.preventDefault(); });
+
     // 折叠切换
     vizContainerToggle.addEventListener("click", () => {
         vizContainerWrapper.classList.toggle("collapsed");
@@ -262,6 +271,10 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
         detailPanel, tooltip,
         更新HUD统计,
     } = 创建HUD覆盖层(vizContainer, getGraph);
+
+    // 拖拽起始瞬间收起残留悬浮窗：引擎 hover 检测在拖拽中仍会触发，
+    // 已显示的 tooltip 不会自行消失，会跟着鼠标引发误触复制
+    vizContainer.addEventListener("pointerdown", () => tooltip.classList.remove("visible"));
 
     // ─── 消息区 + 模型栏 + 输入区 ────────────────────────────
     const vizMsgArea = el("div", {
@@ -486,6 +499,12 @@ export function 构建可视化面板(panel, getGraph, setGraph, ctx) {
                 detailPanel.classList.add('open');
             },
             onNodeHover: (node, event) => {
+                // 拖拽中（旋转/平移按住鼠标）不弹悬浮窗，避免弹窗出现在
+                // 光标下触发误复制；正常悬停（未按键）行为不变
+                if (event && event.buttons) {
+                    tooltip.classList.remove('visible');
+                    return;
+                }
                 if (node) {
                     const 状态文本 = node.status === 'error' ? t('visual.status_error') : node.status === 'warning' ? t('visual.status_warning') : t('visual.status_normal');
                     const 状态类 = node.status || 'normal';
