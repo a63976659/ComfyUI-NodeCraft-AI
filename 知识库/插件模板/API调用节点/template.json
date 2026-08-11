@@ -1,7 +1,0 @@
-{
-    "id": "api-call-node",
-    "name": "API调用节点",
-    "description": "异步 API 调用节点，包含超时处理、错误恢复、HIDDEN 输入（api_key）",
-    "category": "API调用",
-    "files": ["__init__.py", "api_node.py", "README.md"]
-}
